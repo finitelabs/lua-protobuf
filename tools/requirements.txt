@@ -1,0 +1,2 @@
+# Dependencies for gen_lua_proto_schema
+protobuf>=4,<5
