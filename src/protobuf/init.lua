@@ -110,8 +110,7 @@ end
 --- @return Int64HighLow value The decoded value as {high_32, low_32}.
 --- @return integer new_pos The new position in the buffer after decoding.
 function Protobuf.decode_varint64(buffer, pos)
-  --- @type Int64HighLow
-  local result = { 0, 0 } -- {high, low} for precision
+  local result = bit64.new(0, 0)
   local shift = 0
   local byte
 
@@ -119,8 +118,8 @@ function Protobuf.decode_varint64(buffer, pos)
     byte = string.byte(buffer, pos)
     local value_bits = bit32.band(byte, 0x7F)
 
-    -- Create a {high, low} pair for this 7-bit chunk and shift it
-    local chunk = { 0, value_bits }
+    -- Create a Int64 for this 7-bit chunk and shift it
+    local chunk = bit64.new(0, value_bits)
     local shifted = bit64.lsl(chunk, shift)
 
     -- OR with result
@@ -170,7 +169,7 @@ end
 function Protobuf.int64_from_number(value)
   local low = value % 0x100000000
   local high = math.floor(value / 0x100000000)
-  return { high, low }
+  return bit64.new(high, low)
 end
 
 --- Checks if two {high, low} pairs are equal.
@@ -456,11 +455,11 @@ function Protobuf.encode(protoSchema, messageSchema, message)
     local values = message[field.name]
     if values ~= nil then
       if field.repeated then
-        if not IsList(values) then
+        if not IsList(values) or bit64.isInt64(values) then
           error("Field '" .. field.name .. "' is repeated but received a non-list value.")
         end
       else
-        if IsList(values) then
+        if IsList(values) and not bit64.isInt64(values) then
           error("Field '" .. field.name .. "' is not repeated but received a list.")
         end
         values = { values } -- Wrap single value in a list for uniform processing
@@ -630,6 +629,7 @@ end
 --- @see https://protobuf.dev/programming-guides/encoding/
 --- @return boolean success True if all tests passed.
 function Protobuf.selftest()
+  print("Running Protobuf test vectors...")
   local passed = 0
   local failed = 0
 
@@ -646,10 +646,11 @@ function Protobuf.selftest()
   local function assert_eq(actual, expected, msg)
     if actual == expected then
       passed = passed + 1
+      print("  PASS: " .. msg)
       return true
     else
       failed = failed + 1
-      print("FAIL: " .. msg .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
+      print("  FAIL: " .. msg .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
       return false
     end
   end
@@ -662,10 +663,11 @@ function Protobuf.selftest()
     end
     if actual == expected then
       passed = passed + 1
+      print("  PASS: " .. msg)
       return true
     else
       failed = failed + 1
-      print("FAIL: " .. msg .. ": expected " .. expected_hex .. ", got " .. to_hex(actual))
+      print("  FAIL: " .. msg .. ": expected " .. expected_hex .. ", got " .. to_hex(actual))
       return false
     end
   end
@@ -674,10 +676,11 @@ function Protobuf.selftest()
   local function assert_close(actual, expected, epsilon, msg)
     if math.abs(actual - expected) <= epsilon then
       passed = passed + 1
+      print("  PASS: " .. msg)
       return true
     else
       failed = failed + 1
-      print("FAIL: " .. msg .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
+      print("  FAIL: " .. msg .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
       return false
     end
   end
@@ -686,11 +689,12 @@ function Protobuf.selftest()
   local function assert_int64_eq(actual, expected_high, expected_low, msg)
     if type(actual) == "table" and actual[1] == expected_high and actual[2] == expected_low then
       passed = passed + 1
+      print("  PASS: " .. msg)
       return true
     else
       failed = failed + 1
       local actual_str = type(actual) == "table" and string.format("{%d, %d}", actual[1], actual[2]) or tostring(actual)
-      print("FAIL: " .. msg .. ": expected {" .. expected_high .. ", " .. expected_low .. "}, got " .. actual_str)
+      print("  FAIL: " .. msg .. ": expected {" .. expected_high .. ", " .. expected_low .. "}, got " .. actual_str)
       return false
     end
   end
@@ -910,15 +914,67 @@ function Protobuf.selftest()
   assert_eq(Protobuf.int64_is_zero({ 0, 1 }), false, "int64_is_zero false")
 
   -- ==========================================
+  -- INT64 METATABLE MARKER TESTS
+  -- ==========================================
+
+  -- Test: decode_varint64 returns marked Int64 values
+  local decoded_int64, _ = Protobuf.decode_varint64(Protobuf.encode_varint(12345), 1)
+  assert_eq(bit64.isInt64(decoded_int64), true, "decode_varint64 returns marked Int64")
+
+  -- Test: int64_from_number returns marked Int64 values
+  local from_num = Protobuf.int64_from_number(9876543210)
+  assert_eq(bit64.isInt64(from_num), true, "int64_from_number returns marked Int64")
+
+  -- Test: IsList correctly distinguishes Int64 from arrays
+  local int64_val = bit64.new(0, 42)
+  local array_val = { 1, 2 }
+  assert_eq(IsList(int64_val), true, "IsList sees Int64 as list-like (2 elements)")
+  assert_eq(bit64.isInt64(int64_val), true, "bit64.isInt64 identifies Int64")
+  assert_eq(bit64.isInt64(array_val), false, "bit64.isInt64 rejects plain array")
+
+  -- Test: Encode with uint64 field using Int64 value doesn't error
+  -- Create a minimal schema for testing
+  local testSchema = {
+    WireType = { VARINT = 0, FIXED64 = 1, LENGTH_DELIMITED = 2, FIXED32 = 5 },
+    DataType = { UINT64 = 4 },
+    Message = {},
+  }
+  local testMessageSchema = {
+    name = "TestMessage",
+    fields = {
+      [1] = {
+        name = "address",
+        type = testSchema.DataType.UINT64,
+        wireType = testSchema.WireType.VARINT,
+        repeated = false,
+      },
+    },
+  }
+
+  -- This should NOT error - Int64 values should not be treated as repeated fields
+  local success, err = pcall(function()
+    local int64_address = bit64.new(0, 0x12345678)
+    Protobuf.encode(testSchema, testMessageSchema, { address = int64_address })
+  end)
+  if success then
+    passed = passed + 1
+    print("  PASS: encode with Int64 uint64 field")
+  else
+    failed = failed + 1
+    print("  FAIL: encode with Int64 uint64 field: " .. tostring(err))
+  end
+
+  -- Test: Encode/decode roundtrip with uint64 field
+  local original_address = bit64.new(0x00001800, 0x00001000)
+  local encoded = Protobuf.encode(testSchema, testMessageSchema, { address = original_address })
+  local decoded, _ = Protobuf.decode(testSchema, testMessageSchema, encoded)
+  assert_int64_eq(decoded.address, original_address[1], original_address[2], "uint64 field encode/decode roundtrip")
+
+  -- ==========================================
   -- SUMMARY
   -- ==========================================
-  if failed > 0 then
-    print(string.format("FAIL: %d/%d tests failed", failed, passed + failed))
-    return false
-  else
-    print(string.format("PASS: All %d tests passed", passed))
-    return true
-  end
+  print(string.format("\nProtobuf operations: %d/%d tests passed\n", passed, passed + failed))
+  return failed == 0
 end
 
 return Protobuf
