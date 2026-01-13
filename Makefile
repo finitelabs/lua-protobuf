@@ -45,10 +45,13 @@ build: build/amalg.cache
 	@if command -v amalg.lua >/dev/null 2>&1; then \
 		LUA_PATH="./?.lua;./?/init.lua;./src/?.lua;./src/?/init.lua;$(LUAROCKS_PATH)" amalg.lua -o build/protobuf.lua -C ./build/amalg.cache || exit 1;\
 		echo "Built build/protobuf.lua"; \
+		LUA_PATH="./?.lua;./?/init.lua;./src/?.lua;./src/?/init.lua;$(LUAROCKS_PATH)" amalg.lua -o build/protobuf-core.lua -C ./build/amalg.cache -i "vendor%." || exit 1;\
+		echo "Built build/protobuf-core.lua (no vendor dependencies)"; \
 		VERSION=$$(git describe --exact-match --tags 2>/dev/null || echo "dev"); \
 		if [ "$$VERSION" != "dev" ]; then \
 			echo "Injecting version $$VERSION..."; \
 			sed -i.bak 's/VERSION = "dev"/VERSION = "'$$VERSION'"/' build/protobuf.lua && rm build/protobuf.lua.bak; \
+			sed -i.bak 's/VERSION = "dev"/VERSION = "'$$VERSION'"/' build/protobuf-core.lua && rm build/protobuf-core.lua.bak; \
 		fi; \
 		echo "Testing version function..."; \
 		LUA_VERSION=$$(lua -e 'local p = require("build.protobuf"); print(p.version())' 2>/dev/null || echo "test failed"); \

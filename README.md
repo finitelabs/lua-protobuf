@@ -17,6 +17,18 @@ implementation that runs on Lua 5.1, 5.2, 5.3, 5.4, and LuaJIT.
 
 ## Installation
 
+### Option 1: Single-file Distribution (Recommended)
+
+Download a pre-built single-file module from the
+[Releases](https://github.com/finitelabs/lua-protobuf/releases) page:
+
+- **`protobuf.lua`** - Complete bundle with all dependencies included (zero
+  external dependencies)
+- **`protobuf-core.lua`** - Core library only, requires `vendor.bitn` to be
+  installed separately
+
+### Option 2: From Source
+
 Clone this repository:
 
 ```bash
