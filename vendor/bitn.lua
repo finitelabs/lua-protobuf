@@ -1245,7 +1245,7 @@ end
 --- Warning: Lua numbers use 64-bit IEEE 754 doubles with 53-bit mantissa precision.
 --- Values exceeding 53 bits (greater than 9007199254740991) will lose precision.
 --- To maintain full 64-bit precision, keep values in {high, low} format.
---- @param value Int64HighLow The {high_32, low_32} pair.
+--- @param value number|Int64HighLow The {high_32, low_32} pair (or number to pass through).
 --- @param strict? boolean If true, errors when value exceeds 53-bit precision.
 --- @return number result The value as a Lua number (may lose precision for large values unless strict).
 function bit64.to_number(value, strict)
@@ -1916,7 +1916,7 @@ local bitn = {
 }
 
 --- Library version (injected at build time for releases).
-local VERSION = "v0.4.0"
+local VERSION = "v0.4.1"
 
 --- Get the library version string.
 --- @return string version Version string (e.g., "v1.0.0" or "dev")
