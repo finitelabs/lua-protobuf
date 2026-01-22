@@ -144,49 +144,6 @@ function Protobuf.decode_varint(buffer, pos)
   return Protobuf.int64_to_number(result), new_pos
 end
 
--- ============================================================================
--- 64-bit {high, low} Utility Functions
--- ============================================================================
-
---- Converts a {high, low} pair to a hexadecimal string.
---- @param value Int64HighLow The {high_32, low_32} pair.
---- @return string hex The 16-character hexadecimal string (e.g., "0000180000001000").
-function Protobuf.int64_to_hex(value)
-  return string.format("%08X%08X", value[1], value[2])
-end
-
---- Converts a {high, low} pair to a Lua number.
---- Warning: Values exceeding 53-bit precision will lose precision.
---- @param value Int64HighLow The {high_32, low_32} pair.
---- @return number num The value as a Lua number.
-function Protobuf.int64_to_number(value)
-  return value[1] * 0x100000000 + value[2]
-end
-
---- Creates a {high, low} pair from a Lua number.
---- @param value number The number to convert.
---- @return Int64HighLow pair The {high_32, low_32} pair.
-function Protobuf.int64_from_number(value)
-  local low = value % 0x100000000
-  local high = math.floor(value / 0x100000000)
-  return bit64.new(high, low)
-end
-
---- Checks if two {high, low} pairs are equal.
---- @param a Int64HighLow The first {high_32, low_32} pair.
---- @param b Int64HighLow The second {high_32, low_32} pair.
---- @return boolean equal True if the values are equal.
-function Protobuf.int64_equals(a, b)
-  return a[1] == b[1] and a[2] == b[2]
-end
-
---- Checks if a {high, low} pair is zero.
---- @param value Int64HighLow The {high_32, low_32} pair.
---- @return boolean is_zero True if the value is zero.
-function Protobuf.int64_is_zero(value)
-  return value[1] == 0 and value[2] == 0
-end
-
 --- Encodes a 32-bit integer into a fixed-length 4-byte sequence.
 --- @param value integer The 32-bit integer to encode.
 --- @return string bytes The encoded 4-byte sequence.
@@ -622,6 +579,48 @@ function Protobuf.decode(protoSchema, messageSchema, buffer)
   end
 
   return message, pos
+end
+
+-- ============================================================================
+-- 64-bit {high, low} Utility Functions
+-- ============================================================================
+
+--- Converts a {high, low} pair to a hexadecimal string.
+--- @param value Int64HighLow The {high_32, low_32} pair.
+--- @return string hex The 16-character hexadecimal string (e.g., "0000180000001000").
+function Protobuf.int64_to_hex(value)
+  return bit64.to_hex(value)
+end
+
+--- Converts a {high, low} pair to a Lua number.
+--- Warning: Values exceeding 53-bit precision will lose precision.
+--- @param value Int64HighLow The {high_32, low_32} pair.
+--- @param strict? boolean If true, errors when value exceeds 53-bit precision.
+--- @return number result The value as a Lua number (may lose precision for large values unless strict).
+function Protobuf.int64_to_number(value, strict)
+  return bit64.to_number(value, strict)
+end
+
+--- Creates a {high, low} pair from a Lua number.
+--- @param value number The number to convert.
+--- @return Int64HighLow pair The {high_32, low_32} pair.
+function Protobuf.int64_from_number(value)
+  return bit64.from_number(value)
+end
+
+--- Checks if two {high, low} pairs are equal.
+--- @param a Int64HighLow The first {high_32, low_32} pair.
+--- @param b Int64HighLow The second {high_32, low_32} pair.
+--- @return boolean equal True if the values are equal.
+function Protobuf.int64_equals(a, b)
+  return bit64.eq(a, b)
+end
+
+--- Checks if a {high, low} pair is zero.
+--- @param value Int64HighLow The {high_32, low_32} pair.
+--- @return boolean is_zero True if the value is zero.
+function Protobuf.int64_is_zero(value)
+  return bit64.is_zero(value)
 end
 
 --- Runs self-tests to verify the functionality of the Protobuf module.
