@@ -1245,9 +1245,15 @@ end
 --- Warning: Lua numbers use 64-bit IEEE 754 doubles with 53-bit mantissa precision.
 --- Values exceeding 53 bits (greater than 9007199254740991) will lose precision.
 --- To maintain full 64-bit precision, keep values in {high, low} format.
---- @param value number|Int64HighLow The {high_32, low_32} pair (or number to pass through).
+--- @param value number|integer|Int64HighLow The {high_32, low_32} pair (or number to pass through).
 --- @param strict? boolean If true, errors when value exceeds 53-bit precision.
---- @return number result The value as a Lua number (may lose precision for large values unless strict).
+--- @return number|integer result The value as a Lua number (may lose precision for large values unless strict).
+--- @overload fun(value: number, strict?: boolean): number
+--- @overload fun(value: integer, strict?: boolean): integer
+--- @overload fun(value: Int64HighLow, strict?: boolean): integer
+--- @overload fun(value: number): number
+--- @overload fun(value: integer): integer
+--- @overload fun(value: Int64HighLow): integer
 function bit64.to_number(value, strict)
   if type(value) == "number" then
     return value
@@ -1910,13 +1916,16 @@ end
 ---
 --- @class bitn
 local bitn = {
+  --- @type bit16
   bit16 = require("bitn.bit16"),
+  --- @type bit32
   bit32 = require("bitn.bit32"),
+  --- @type bit64
   bit64 = require("bitn.bit64"),
 }
 
 --- Library version (injected at build time for releases).
-local VERSION = "v0.4.1"
+local VERSION = "v0.4.2"
 
 --- Get the library version string.
 --- @return string version Version string (e.g., "v1.0.0" or "dev")
