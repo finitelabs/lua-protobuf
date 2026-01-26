@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import shutil
 import subprocess
 import tempfile
 from textwrap import dedent
@@ -40,53 +41,53 @@ LUA_TYPE_MAP: dict[int, list[str]] = {
 
 # Lua wire type mapping
 WIRE_TYPE_MAP: dict[int, str] = {
-    FieldDescriptorProto.TYPE_DOUBLE: "PROTOBUF_SCHEMA.WireType.FIXED64",
-    FieldDescriptorProto.TYPE_FLOAT: "PROTOBUF_SCHEMA.WireType.FIXED32",
-    FieldDescriptorProto.TYPE_INT64: "PROTOBUF_SCHEMA.WireType.VARINT",
-    FieldDescriptorProto.TYPE_UINT64: "PROTOBUF_SCHEMA.WireType.VARINT",
-    FieldDescriptorProto.TYPE_INT32: "PROTOBUF_SCHEMA.WireType.VARINT",
-    FieldDescriptorProto.TYPE_FIXED64: "PROTOBUF_SCHEMA.WireType.FIXED64",
-    FieldDescriptorProto.TYPE_FIXED32: "PROTOBUF_SCHEMA.WireType.FIXED32",
-    FieldDescriptorProto.TYPE_BOOL: "PROTOBUF_SCHEMA.WireType.VARINT",
-    FieldDescriptorProto.TYPE_STRING: "PROTOBUF_SCHEMA.WireType.LENGTH_DELIMITED",
-    FieldDescriptorProto.TYPE_MESSAGE: "PROTOBUF_SCHEMA.WireType.LENGTH_DELIMITED",
-    FieldDescriptorProto.TYPE_BYTES: "PROTOBUF_SCHEMA.WireType.LENGTH_DELIMITED",
-    FieldDescriptorProto.TYPE_UINT32: "PROTOBUF_SCHEMA.WireType.VARINT",
-    FieldDescriptorProto.TYPE_ENUM: "PROTOBUF_SCHEMA.WireType.VARINT",
-    FieldDescriptorProto.TYPE_SFIXED32: "PROTOBUF_SCHEMA.WireType.FIXED32",
-    FieldDescriptorProto.TYPE_SFIXED64: "PROTOBUF_SCHEMA.WireType.FIXED64",
-    FieldDescriptorProto.TYPE_SINT32: "PROTOBUF_SCHEMA.WireType.VARINT",
-    FieldDescriptorProto.TYPE_SINT64: "PROTOBUF_SCHEMA.WireType.VARINT",
+    FieldDescriptorProto.TYPE_DOUBLE: "ProtoSchema.WireType.FIXED64",
+    FieldDescriptorProto.TYPE_FLOAT: "ProtoSchema.WireType.FIXED32",
+    FieldDescriptorProto.TYPE_INT64: "ProtoSchema.WireType.VARINT",
+    FieldDescriptorProto.TYPE_UINT64: "ProtoSchema.WireType.VARINT",
+    FieldDescriptorProto.TYPE_INT32: "ProtoSchema.WireType.VARINT",
+    FieldDescriptorProto.TYPE_FIXED64: "ProtoSchema.WireType.FIXED64",
+    FieldDescriptorProto.TYPE_FIXED32: "ProtoSchema.WireType.FIXED32",
+    FieldDescriptorProto.TYPE_BOOL: "ProtoSchema.WireType.VARINT",
+    FieldDescriptorProto.TYPE_STRING: "ProtoSchema.WireType.LENGTH_DELIMITED",
+    FieldDescriptorProto.TYPE_MESSAGE: "ProtoSchema.WireType.LENGTH_DELIMITED",
+    FieldDescriptorProto.TYPE_BYTES: "ProtoSchema.WireType.LENGTH_DELIMITED",
+    FieldDescriptorProto.TYPE_UINT32: "ProtoSchema.WireType.VARINT",
+    FieldDescriptorProto.TYPE_ENUM: "ProtoSchema.WireType.VARINT",
+    FieldDescriptorProto.TYPE_SFIXED32: "ProtoSchema.WireType.FIXED32",
+    FieldDescriptorProto.TYPE_SFIXED64: "ProtoSchema.WireType.FIXED64",
+    FieldDescriptorProto.TYPE_SINT32: "ProtoSchema.WireType.VARINT",
+    FieldDescriptorProto.TYPE_SINT64: "ProtoSchema.WireType.VARINT",
 }
 TYPE_MAP: dict[int, str] = {
-    FieldDescriptorProto.TYPE_DOUBLE: "PROTOBUF_SCHEMA.DataType.DOUBLE",
-    FieldDescriptorProto.TYPE_FLOAT: "PROTOBUF_SCHEMA.DataType.FLOAT",
-    FieldDescriptorProto.TYPE_INT64: "PROTOBUF_SCHEMA.DataType.INT64",
-    FieldDescriptorProto.TYPE_UINT64: "PROTOBUF_SCHEMA.DataType.UINT64",
-    FieldDescriptorProto.TYPE_INT32: "PROTOBUF_SCHEMA.DataType.INT32",
-    FieldDescriptorProto.TYPE_FIXED64: "PROTOBUF_SCHEMA.DataType.FIXED64",
-    FieldDescriptorProto.TYPE_FIXED32: "PROTOBUF_SCHEMA.DataType.FIXED32",
-    FieldDescriptorProto.TYPE_BOOL: "PROTOBUF_SCHEMA.DataType.BOOL",
-    FieldDescriptorProto.TYPE_STRING: "PROTOBUF_SCHEMA.DataType.STRING",
-    FieldDescriptorProto.TYPE_MESSAGE: "PROTOBUF_SCHEMA.DataType.MESSAGE",
-    FieldDescriptorProto.TYPE_BYTES: "PROTOBUF_SCHEMA.DataType.BYTES",
-    FieldDescriptorProto.TYPE_UINT32: "PROTOBUF_SCHEMA.DataType.UINT32",
-    FieldDescriptorProto.TYPE_ENUM: "PROTOBUF_SCHEMA.DataType.ENUM",
-    FieldDescriptorProto.TYPE_SFIXED32: "PROTOBUF_SCHEMA.DataType.SFIXED32",
-    FieldDescriptorProto.TYPE_SFIXED64: "PROTOBUF_SCHEMA.DataType.SFIXED64",
-    FieldDescriptorProto.TYPE_SINT32: "PROTOBUF_SCHEMA.DataType.SINT32",
-    FieldDescriptorProto.TYPE_SINT64: "PROTOBUF_SCHEMA.DataType.SINT64",
+    FieldDescriptorProto.TYPE_DOUBLE: "ProtoSchema.DataType.DOUBLE",
+    FieldDescriptorProto.TYPE_FLOAT: "ProtoSchema.DataType.FLOAT",
+    FieldDescriptorProto.TYPE_INT64: "ProtoSchema.DataType.INT64",
+    FieldDescriptorProto.TYPE_UINT64: "ProtoSchema.DataType.UINT64",
+    FieldDescriptorProto.TYPE_INT32: "ProtoSchema.DataType.INT32",
+    FieldDescriptorProto.TYPE_FIXED64: "ProtoSchema.DataType.FIXED64",
+    FieldDescriptorProto.TYPE_FIXED32: "ProtoSchema.DataType.FIXED32",
+    FieldDescriptorProto.TYPE_BOOL: "ProtoSchema.DataType.BOOL",
+    FieldDescriptorProto.TYPE_STRING: "ProtoSchema.DataType.STRING",
+    FieldDescriptorProto.TYPE_MESSAGE: "ProtoSchema.DataType.MESSAGE",
+    FieldDescriptorProto.TYPE_BYTES: "ProtoSchema.DataType.BYTES",
+    FieldDescriptorProto.TYPE_UINT32: "ProtoSchema.DataType.UINT32",
+    FieldDescriptorProto.TYPE_ENUM: "ProtoSchema.DataType.ENUM",
+    FieldDescriptorProto.TYPE_SFIXED32: "ProtoSchema.DataType.SFIXED32",
+    FieldDescriptorProto.TYPE_SFIXED64: "ProtoSchema.DataType.SFIXED64",
+    FieldDescriptorProto.TYPE_SINT32: "ProtoSchema.DataType.SINT32",
+    FieldDescriptorProto.TYPE_SINT64: "ProtoSchema.DataType.SINT64",
 }
 
 
 def get_wire_type(field_type: int) -> str:
     """Maps a protobuf field type to Lua's wire type representation."""
-    return WIRE_TYPE_MAP.get(field_type, "PROTOBUF_SCHEMA.WireType.UNKNOWN")
+    return WIRE_TYPE_MAP.get(field_type, "ProtoSchema.WireType.UNKNOWN")
 
 
 def get_type(field_type: int) -> str:
     """Maps a protobuf field type to Lua's wire type representation."""
-    return TYPE_MAP.get(field_type, "PROTOBUF_SCHEMA.WIRE.UNKNOWN")
+    return TYPE_MAP.get(field_type, "ProtoSchema.WIRE.UNKNOWN")
 
 
 def get_lua_type(field: FieldDescriptorProto) -> str:
@@ -187,7 +188,8 @@ def parse_message(
         indent: int = 0,
 ) -> str:
     """Parse a message descriptor into a Lua table."""
-    lua = ("  " * indent) + f"{message.name} = {{\n"
+    lua = ("  " * indent) + f"--- @type ProtoMessageSchema\n"
+    lua += ("  " * indent) + f"ProtoSchema.Message.{message.name} = {{\n"
     lua += ("  " * (indent + 1)) + f'name = "{message.name}",\n'
 
     # Build options table
@@ -233,13 +235,13 @@ def parse_message(
     else:
         lua += "},\n"
 
-    return lua + ("  " * indent) + "},\n"
+    return lua + ("  " * indent) + "}\n\n"
 
 
 def parse_enum(enum, indent: int = 0) -> str:
     """Parse an enum descriptor into a Lua table."""
     lua = ("  " * indent) + f"--- @enum Proto{enum.name}\n"
-    lua += ("  " * indent) + f"{enum.name} = {{"
+    lua += ("  " * indent) + f"ProtoSchema.Enum.{enum.name} = {{"
     new_line_added = False
     for value in enum.value:
         if not new_line_added:
@@ -247,9 +249,9 @@ def parse_enum(enum, indent: int = 0) -> str:
             new_line_added = True
         lua += parse_enum_value(value, indent=indent + 1)
     if new_line_added:
-        lua += ("  " * indent) + "},\n"
+        lua += ("  " * indent) + "}\n\n"
     else:
-        lua += "},\n"
+        lua += "}\n\n"
     return lua
 
 
@@ -262,17 +264,18 @@ def parse_service_method(
     lua += ("  " * (indent + 1)) + f'method = "{method.name}",\n'
     lua += (
                    "  " * (indent + 1)
-           ) + f"inputType = PROTOBUF_SCHEMA.Message{method.input_type},\n"
+           ) + f"inputType = ProtoSchema.Message{method.input_type},\n"
     lua += (
                    "  " * (indent + 1)
-           ) + f"outputType = PROTOBUF_SCHEMA.Message{method.output_type},\n"
+           ) + f"outputType = ProtoSchema.Message{method.output_type},\n"
     lua += ("  " * indent) + "},\n"
     return lua
 
 
 def parse_service(service, indent: int = 0) -> str:
     """Parse a service descriptor into a Lua table."""
-    lua = ("  " * indent) + f"{service.name} = {{"
+    lua = ("  " * indent) + f"--- @type ProtoServiceSchema\n"
+    lua += ("  " * indent) + f"ProtoSchema.RPC.{service.name} = {{"
     new_line_added = False
     for method in service.method:
         if not new_line_added:
@@ -280,9 +283,9 @@ def parse_service(service, indent: int = 0) -> str:
             new_line_added = True
         lua += parse_service_method(service, method, indent=indent + 1)
     if new_line_added:
-        lua += ("  " * indent) + "},\n"
+        lua += ("  " * indent) + "}\n\n"
     else:
-        lua += "},\n"
+        lua += "}\n\n"
     return lua
 
 
@@ -304,7 +307,6 @@ def parse_descriptor_set(fds: FileDescriptorSet) -> str:
     lua = ""
 
     # Generate class annotations for all message types first
-    lua += "--\n-- Message type annotations for IDE support\n--\n\n"
     for proto_file in fds.file:
         if proto_file.package == "google.protobuf":
             continue
@@ -314,51 +316,66 @@ def parse_descriptor_set(fds: FileDescriptorSet) -> str:
             lua += generate_message_class_annotation(message, indent=0)
             lua += "\n"
 
-    lua += "PROTOBUF_SCHEMA.Enum = {\n"
     enums = []
+    any_content_added = False
     for proto_file in fds.file:
         if proto_file.package == "google.protobuf":
             continue
-        if proto_file.package:
-            lua += f"-- Package: {proto_file.package}\n"
+        comment_added = False
         for message in proto_file.enum_type:
-            lua += parse_enum(message, indent=1)
+            any_content_added = True
+            if not comment_added and proto_file.package:
+                lua += f"-- Package: {proto_file.package}\n"
+                comment_added = True
+            lua += parse_enum(message, indent=0)
             enums.append(f"Proto{message.name}")
-    lua += "}\n\n"
-    lua += f"--- @alias ProtoEnum " + "|".join(enums) + "\n\n"
+    if any_content_added:
+        lua += "\n"
 
-    lua += "PROTOBUF_SCHEMA.Message = {\n"
+    any_content_added = False
     for proto_file in fds.file:
         if proto_file.package == "google.protobuf":
             continue
-        if proto_file.package:
-            lua += f"-- Package: {proto_file.package}\n"
+        comment_added = False
         for message in proto_file.message_type:
+            any_content_added = True
+            if not comment_added and proto_file.package:
+                lua += f"-- Package: {proto_file.package}\n"
+                comment_added = True
             lua += parse_message(
-                message, message_option_extensions=message_option_extensions, indent=1
+                message, message_option_extensions=message_option_extensions, indent=0
             )
-    lua += "}\n\n"
+    if any_content_added:
+        lua += "\n"
 
-    lua += "PROTOBUF_SCHEMA.RPC = {\n"
+    any_content_added = False
     for proto_file in fds.file:
         if proto_file.package == "google.protobuf":
             continue
-        if proto_file.package:
-            lua += f"-- Package: {proto_file.package}\n"
+        comment_added = False
         for service in proto_file.service:
-            lua += parse_service(service, indent=1)
-    lua += "}\n"
+            any_content_added = True
+            if not comment_added and proto_file.package:
+                lua += f"-- Package: {proto_file.package}\n"
+                comment_added = True
+            lua += parse_service(service, indent=0)
+    if any_content_added:
+        lua += "\n"
 
     return lua
 
 
 def resolve_input(input_file_or_url: str, tmpdir: str) -> str:
-    """Resolve an input file or URL to a local file path."""
+    """Resolve an input file or URL to a local file path in tmpdir."""
     if not os.path.isdir(tmpdir):
         raise ValueError("Temporary directory must be provided for URL inputs.")
 
     if os.path.isfile(input_file_or_url):
-        return input_file_or_url
+        # Copy local file to tmpdir so protoc can find it
+        filename = os.path.basename(input_file_or_url)
+        dest_path = os.path.join(tmpdir, filename)
+        shutil.copy(input_file_or_url, dest_path)
+        return dest_path
 
     parsed_url = urlparse(input_file_or_url)
     if parsed_url.scheme not in ("http", "https"):
@@ -411,9 +428,50 @@ def main():
                     -- Generated Lua schema from protobuf descriptor set
                     -- Do not edit manually
 
-                    --- Int64 values may be represented as a {{high, low}} table when the value
-                    --- exceeds Lua's number precision (values > 2^53).
-                    --- @alias Int64HighLow {{[1]: number, [2]: number}}
+                    --- @class ProtoSchema
+                    local ProtoSchema = {{}}
+                    
+                    --- Maps enum names to their definitions.
+                    ProtoSchema.Enum = {{}}
+
+                    --- Maps message names to their definitions.
+                    --- @type table<string, ProtoMessageSchema>
+                    ProtoSchema.Message = {{}}
+
+                    --- Maps service names to their method definitions.
+                    --- @type table<string, ProtoServiceSchema>
+                    ProtoSchema.RPC = {{}}
+
+                    --- ProtoWireType Maps protobuf wire types to their integer values.
+                    --- @enum ProtoWireType
+                    ProtoSchema.WireType = {{
+                      VARINT = 0,
+                      FIXED64 = 1,
+                      LENGTH_DELIMITED = 2,
+                      FIXED32 = 5,
+                    }}
+                    
+                    --- ProtoDataType Maps protobuf data types to their integer values.
+                    --- @enum ProtoDataType
+                    ProtoSchema.DataType = {{
+                      DOUBLE = 1,
+                      FLOAT = 2,
+                      INT64 = 3,
+                      UINT64 = 4,
+                      INT32 = 5,
+                      FIXED64 = 6,
+                      FIXED32 = 7,
+                      BOOL = 8,
+                      STRING = 9,
+                      MESSAGE = 11,
+                      BYTES = 12,
+                      UINT32 = 13,
+                      ENUM = 14,
+                      SFIXED32 = 15,
+                      SFIXED64 = 16,
+                      SINT32 = 17,
+                      SINT64 = 18,
+                    }}
 
                     --- @class ProtoFieldSchema
                     --- @field name string The name of the field.
@@ -436,48 +494,11 @@ def main():
                     --- @class ProtoServiceSchema
                     --- @field [string] ProtoServiceMethodSchema Maps method names to their method definitions.
                     
-                    --- @class ProtoSchema
-                    --- @field WireType ProtoWireType Maps protobuf wire types to their integer values.
-                    --- @field DataType ProtoDataType Maps protobuf data types to their integer values.
-                    --- @field Message table<string, ProtoMessageSchema> Maps message names to their definitions.
-                    --- @field Enum table<string, ProtoEnum> Maps enum names to their definitions.
-                    --- @field RPC table<string, ProtoServiceSchema> Maps service names to their method definitions.
-                    local PROTOBUF_SCHEMA = {{}}
-                    
-                    --- @enum ProtoWireType
-                    PROTOBUF_SCHEMA.WireType = {{
-                      VARINT = 0,
-                      FIXED64 = 1,
-                      LENGTH_DELIMITED = 2,
-                      FIXED32 = 5,
-                    }}
-                    
-                    --- @enum ProtoDataType
-                    PROTOBUF_SCHEMA.DataType = {{
-                      DOUBLE = 1,
-                      FLOAT = 2,
-                      INT64 = 3,
-                      UINT64 = 4,
-                      INT32 = 5,
-                      FIXED64 = 6,
-                      FIXED32 = 7,
-                      BOOL = 8,
-                      STRING = 9,
-                      MESSAGE = 11,
-                      BYTES = 12,
-                      UINT32 = 13,
-                      ENUM = 14,
-                      SFIXED32 = 15,
-                      SFIXED64 = 16,
-                      SINT32 = 17,
-                      SINT64 = 18,
-                    }}
-                    
                     """
                     )
                 )
                 f.write(lua_content)
-                f.write("\nreturn PROTOBUF_SCHEMA\n")
+                f.write("return ProtoSchema\n")
 
             print(f"Schema successfully generated and saved to {args.output}")
 

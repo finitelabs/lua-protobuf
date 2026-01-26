@@ -37,6 +37,17 @@ jobs:
           version: v2.1.0
           args: false # Will be run as part of `make check`
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install protobuf compiler
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Setup schema generator
+        run: make setup-schema-generator
+
       - name: Check
         run: make check
 

@@ -124,6 +124,40 @@ gen-schema:
 	fi
 	@.venv/bin/python3 tools/gen_lua_proto_schema $(OUTPUT) $(PROTO)
 
+# Generate the base types schema from empty.proto
+.PHONY: gen-types
+gen-types:
+	@if [ ! -f .venv/bin/python3 ]; then \
+		echo "Python virtual environment not found. Run 'make setup-schema-generator' first."; \
+		exit 1; \
+	fi
+	@echo "Generating src/protobuf/types.lua from empty.proto..."
+	@.venv/bin/python3 tools/gen_lua_proto_schema src/protobuf/types.lua empty.proto
+	@echo "Generated src/protobuf/types.lua"
+
+# Check that types.lua matches what would be generated (for CI)
+.PHONY: check-types
+check-types:
+	@if [ ! -f .venv/bin/python3 ]; then \
+		echo "Python virtual environment not found. Run 'make setup-schema-generator' first."; \
+		exit 1; \
+	fi
+	@echo "Checking src/protobuf/types.lua is up to date..."
+	@mkdir -p build
+	@.venv/bin/python3 tools/gen_lua_proto_schema build/types.lua.tmp empty.proto
+	@if diff -q src/protobuf/types.lua build/types.lua.tmp >/dev/null 2>&1; then \
+		echo "src/protobuf/types.lua is up to date"; \
+		rm -f build/types.lua.tmp; \
+	else \
+		echo "ERROR: src/protobuf/types.lua is out of date!"; \
+		echo "Run 'make gen-types' to regenerate it."; \
+		echo ""; \
+		echo "Diff:"; \
+		diff src/protobuf/types.lua build/types.lua.tmp || true; \
+		rm -f build/types.lua.tmp; \
+		exit 1; \
+	fi
+
 # Format Lua code with stylua
 .PHONY: format
 format:
@@ -162,7 +196,7 @@ lint:
 	fi
 
 .PHONY: check
-check: format-check lint
+check: format-check lint check-types
 	@echo "Code quality checks complete."
 
 # Clean generated files
@@ -186,6 +220,8 @@ help:
 	@echo "Schema Generation:"
 	@echo "  make setup-schema-generator                     - Setup Python venv for schema generator"
 	@echo "  make gen-schema PROTO=<file> OUTPUT=<file>      - Generate Lua schema from proto file(s)"
+	@echo "  make gen-types                                  - Regenerate src/protobuf/types.lua"
+	@echo "  make check-types                                - Verify types.lua matches empty.proto"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  make format            - Format all code (Lua)"
