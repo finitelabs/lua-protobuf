@@ -1,7 +1,10 @@
+--- @module "protobuf"
 --- A lightweight Protocol Buffers implementation for Lua.
 --- This module provides encoding and decoding functions for Protocol Buffers data format.
+--- @class protobuf
+local pb = {}
 
-local bitn = require("vendor.bitn")
+local bitn = require("bitn")
 local bit32 = bitn.bit32
 local bit64 = bitn.bit64
 
@@ -24,23 +27,19 @@ local function is_list(t)
   return count > 0
 end
 
---- @class Protobuf
---- A class providing Protocol Buffers encoding and decoding functionality.
-local Protobuf = {}
-
 -- Version
 local VERSION = "dev"
 
 --- Returns the library version.
 --- @return string version The version string.
-function Protobuf.version()
+function pb.version()
   return VERSION
 end
 
 --- Encodes an integer into a varint byte sequence.
 --- @param value integer|boolean|Int64HighLow The value to encode. Can be a number, boolean, or {high, low} pair for 64-bit values.
 --- @return string bytes The encoded varint byte sequence.
-function Protobuf.encode_varint(value)
+function pb.encode_varint(value)
   if type(value) == "boolean" then
     value = value and 1 or 0
   end
@@ -108,7 +107,7 @@ end
 --- @param pos integer The position in the buffer to start decoding from.
 --- @return Int64HighLow value The decoded value as {high_32, low_32}.
 --- @return integer new_pos The new position in the buffer after decoding.
-function Protobuf.decode_varint64(buffer, pos)
+function pb.decode_varint64(buffer, pos)
   local result = bit64.new(0, 0)
   local shift = 0
   local byte
@@ -138,15 +137,15 @@ end
 --- @param pos integer The position in the buffer to start decoding from.
 --- @return integer value The decoded value as a number.
 --- @return integer new_pos The new position in the buffer after decoding.
-function Protobuf.decode_varint(buffer, pos)
-  local result, new_pos = Protobuf.decode_varint64(buffer, pos)
-  return Protobuf.int64_to_number(result), new_pos
+function pb.decode_varint(buffer, pos)
+  local result, new_pos = pb.decode_varint64(buffer, pos)
+  return pb.int64_to_number(result), new_pos
 end
 
 --- Encodes a 32-bit integer into a fixed-length 4-byte sequence.
 --- @param value integer The 32-bit integer to encode.
 --- @return string bytes The encoded 4-byte sequence.
-function Protobuf.encode_fixed32(value)
+function pb.encode_fixed32(value)
   local b1 = value % 256
   local b2 = math.floor(value / 256) % 256
   local b3 = math.floor(value / 65536) % 256
@@ -159,7 +158,7 @@ end
 --- @param pos integer The position in the buffer to start decoding from.
 --- @return integer value The decoded 32-bit integer value.
 --- @return integer new_pos The new position in the buffer after decoding.
-function Protobuf.decode_fixed32(buffer, pos)
+function pb.decode_fixed32(buffer, pos)
   local b1, b2, b3, b4 = string.byte(buffer, pos, pos + 3)
   local value = b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
   --- @cast value integer
@@ -169,7 +168,7 @@ end
 --- Encodes a 64-bit integer into a fixed-length 8-byte sequence.
 --- @param value Int64HighLow|number The 64-bit integer as {high, low} or number.
 --- @return string bytes The encoded 8-byte sequence.
-function Protobuf.encode_fixed64(value)
+function pb.encode_fixed64(value)
   local high, low
   if bit64.is_int64(value) then
     --- @cast value Int64HighLow
@@ -195,7 +194,7 @@ end
 --- @param pos integer The position in the buffer to start decoding from.
 --- @return Int64HighLow value The decoded 64-bit value as {high_32, low_32}.
 --- @return integer new_pos The new position in the buffer after decoding.
-function Protobuf.decode_fixed64(buffer, pos)
+function pb.decode_fixed64(buffer, pos)
   --- @type integer, integer, integer, integer, integer, integer, integer, integer
   local b1, b2, b3, b4, b5, b6, b7, b8 = string.byte(buffer, pos, pos + 7)
   local low = b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
@@ -206,7 +205,7 @@ end
 --- Encodes a floating-point number into a 4-byte IEEE 754 single-precision format.
 --- @param value number The floating-point number to encode.
 --- @return string bytes The encoded 4-byte sequence.
-function Protobuf.encode_float(value)
+function pb.encode_float(value)
   if value == 0 then
     return string.char(0, 0, 0, 0)
   end
@@ -245,7 +244,7 @@ end
 --- @param pos integer The position in the buffer to start decoding from.
 --- @return number value The decoded floating-point value.
 --- @return integer new_pos The new position in the buffer after decoding.
-function Protobuf.decode_float(buffer, pos)
+function pb.decode_float(buffer, pos)
   local b1, b2, b3, b4 = string.byte(buffer, pos, pos + 3)
 
   local sign = bit32.rshift(b4, 7)
@@ -267,7 +266,7 @@ end
 --- Encodes a double-precision floating-point number into an 8-byte IEEE 754 format.
 --- @param value number The double-precision floating-point number to encode.
 --- @return string bytes The encoded 8-byte sequence.
-function Protobuf.encode_double(value)
+function pb.encode_double(value)
   if value == 0 then
     return string.char(0, 0, 0, 0, 0, 0, 0, 0)
   end
@@ -313,7 +312,7 @@ end
 --- @param pos integer The position in the buffer to start decoding from.
 --- @return number value The decoded double-precision floating-point value.
 --- @return integer new_pos The new position in the buffer after decoding.
-function Protobuf.decode_double(buffer, pos)
+function pb.decode_double(buffer, pos)
   local b1, b2, b3, b4, b5, b6, b7, b8 = string.byte(buffer, pos, pos + 7)
 
   local sign = bit32.rshift(b8, 7)
@@ -341,14 +340,14 @@ end
 --- Encodes a signed 32-bit integer using zigzag encoding.
 --- @param value integer The signed integer to encode.
 --- @return integer encoded The zigzag-encoded value.
-function Protobuf.zigzag_encode32(value)
+function pb.zigzag_encode32(value)
   return bit32.bxor(bit32.lshift(value, 1), bit32.arshift(value, 31))
 end
 
 --- Decodes a zigzag-encoded 32-bit integer.
 --- @param value integer The zigzag-encoded value.
 --- @return integer decoded The signed integer.
-function Protobuf.zigzag_decode32(value)
+function pb.zigzag_decode32(value)
   local result = bit32.bxor(bit32.rshift(value, 1), -bit32.band(value, 1))
   -- Convert unsigned to signed if high bit is set
   if result >= 0x80000000 then
@@ -360,7 +359,7 @@ end
 --- Encodes a signed 64-bit integer using zigzag encoding.
 --- @param value Int64HighLow The signed 64-bit integer as {high, low}.
 --- @return Int64HighLow encoded The zigzag-encoded value as {high, low}.
-function Protobuf.zigzag_encode64(value)
+function pb.zigzag_encode64(value)
   -- (n << 1) ^ (n >> 63)
   local shifted = bit64.lsl(value, 1)
   local sign_extended = bit64.asr(value, 63)
@@ -370,7 +369,7 @@ end
 --- Decodes a zigzag-encoded 64-bit integer.
 --- @param value Int64HighLow The zigzag-encoded value as {high, low}.
 --- @return Int64HighLow decoded The signed 64-bit integer as {high, low}.
-function Protobuf.zigzag_decode64(value)
+function pb.zigzag_decode64(value)
   -- (n >>> 1) ^ -(n & 1)
   local shifted = bit64.shr(value, 1)
   local sign_bit = bit64.new(0, bit32.band(value[2], 1))
@@ -387,8 +386,8 @@ end
 --- Encodes a length-delimited field (string or nested message).
 --- @param data string The data to encode.
 --- @return string bytes The encoded length-delimited data.
-function Protobuf.encode_length_delimited(data)
-  return Protobuf.encode_varint(#data) .. data
+function pb.encode_length_delimited(data)
+  return pb.encode_varint(#data) .. data
 end
 
 --- Decodes a length-delimited field.
@@ -396,8 +395,8 @@ end
 --- @param pos integer The position in the buffer to start decoding from.
 --- @return string data The decoded data.
 --- @return integer new_pos The new position in the buffer after decoding.
-function Protobuf.decode_length_delimited(buffer, pos)
-  local length, new_pos = Protobuf.decode_varint(buffer, pos)
+function pb.decode_length_delimited(buffer, pos)
+  local length, new_pos = pb.decode_varint(buffer, pos)
   local data = string.sub(buffer, new_pos, new_pos + length - 1)
   return data, new_pos + length
 end
@@ -407,7 +406,7 @@ end
 --- @param messageSchema ProtoMessageSchema The message schema to use for encoding.
 --- @param message table<string, any> The message body to encode.
 --- @return string buffer The encoded message.
-function Protobuf.encode(protoSchema, messageSchema, message)
+function pb.encode(protoSchema, messageSchema, message)
   local buffer = ""
 
   for field_number, field in pairs(messageSchema.fields) do
@@ -427,35 +426,35 @@ function Protobuf.encode(protoSchema, messageSchema, message)
         -- Compute the key (field number and wire type)
         --- @cast field.wireType integer
         local key = bit32.lshift(field_number, 3) + field.wireType
-        buffer = buffer .. Protobuf.encode_varint(key)
+        buffer = buffer .. pb.encode_varint(key)
 
         local fieldType = field.type
         if field.wireType == protoSchema.WireType.VARINT then
           -- Handle zigzag encoding for signed types
           if fieldType == protoSchema.DataType.SINT32 then
-            buffer = buffer .. Protobuf.encode_varint(Protobuf.zigzag_encode32(value))
+            buffer = buffer .. pb.encode_varint(pb.zigzag_encode32(value))
           elseif fieldType == protoSchema.DataType.SINT64 then
-            buffer = buffer .. Protobuf.encode_varint(Protobuf.zigzag_encode64(value))
+            buffer = buffer .. pb.encode_varint(pb.zigzag_encode64(value))
           else
-            buffer = buffer .. Protobuf.encode_varint(value)
+            buffer = buffer .. pb.encode_varint(value)
           end
         elseif field.wireType == protoSchema.WireType.FIXED64 then
           if fieldType == protoSchema.DataType.DOUBLE then
-            buffer = buffer .. Protobuf.encode_double(value)
+            buffer = buffer .. pb.encode_double(value)
           else
             -- FIXED64, SFIXED64
-            buffer = buffer .. Protobuf.encode_fixed64(value)
+            buffer = buffer .. pb.encode_fixed64(value)
           end
         elseif field.wireType == protoSchema.WireType.FIXED32 then
           if fieldType == protoSchema.DataType.FLOAT then
-            buffer = buffer .. Protobuf.encode_float(value)
+            buffer = buffer .. pb.encode_float(value)
           else
             -- FIXED32, SFIXED32
-            buffer = buffer .. Protobuf.encode_fixed32(value)
+            buffer = buffer .. pb.encode_fixed32(value)
           end
         elseif field.wireType == protoSchema.WireType.LENGTH_DELIMITED then
           if type(value) == "string" then
-            buffer = buffer .. Protobuf.encode_length_delimited(value)
+            buffer = buffer .. pb.encode_length_delimited(value)
           elseif type(value) == "table" then
             if field.subschema == nil then
               error(
@@ -467,8 +466,8 @@ function Protobuf.encode(protoSchema, messageSchema, message)
               )
             end
             -- For nested messages
-            local nested_message = Protobuf.encode(protoSchema, protoSchema.Message[field.subschema], value)
-            buffer = buffer .. Protobuf.encode_length_delimited(nested_message)
+            local nested_message = pb.encode(protoSchema, protoSchema.Message[field.subschema], value)
+            buffer = buffer .. pb.encode_length_delimited(nested_message)
           end
         else
           error("Unsupported wire type: " .. tostring(field.wireType))
@@ -486,7 +485,7 @@ end
 --- @param buffer string The encoded message bytes.
 --- @return table<string, any> message The decoded message.
 --- @return number pos The position in the buffer after decoding.
-function Protobuf.decode(protoSchema, messageSchema, buffer)
+function pb.decode(protoSchema, messageSchema, buffer)
   --- @type integer
   local pos = 1
   local message = {}
@@ -494,7 +493,7 @@ function Protobuf.decode(protoSchema, messageSchema, buffer)
   local key
   while pos <= #buffer do
     -- Decode the key (field number and wire type)
-    key, pos = Protobuf.decode_varint(buffer, pos)
+    key, pos = pb.decode_varint(buffer, pos)
     local field_number = bit32.rshift(key, 3)
     local wire_type = bit32.band(key, 0x7)
 
@@ -505,7 +504,7 @@ function Protobuf.decode(protoSchema, messageSchema, buffer)
       if wire_type == protoSchema.WireType.VARINT then
         -- Decode and discard the varint
         local _
-        _, pos = Protobuf.decode_varint(buffer, pos)
+        _, pos = pb.decode_varint(buffer, pos)
       elseif wire_type == protoSchema.WireType.FIXED64 then
         -- Skip 8 bytes
         pos = pos + 8
@@ -515,7 +514,7 @@ function Protobuf.decode(protoSchema, messageSchema, buffer)
       elseif wire_type == protoSchema.WireType.LENGTH_DELIMITED then
         -- Decode length and skip that many bytes
         local length
-        length, pos = Protobuf.decode_varint(buffer, pos)
+        length, pos = pb.decode_varint(buffer, pos)
         pos = pos + length
       else
         error("Unknown wire type: " .. wire_type)
@@ -528,41 +527,41 @@ function Protobuf.decode(protoSchema, messageSchema, buffer)
       if wire_type == protoSchema.WireType.VARINT then
         -- Use 64-bit decoder for types that need full precision
         if fieldType == protoSchema.DataType.UINT64 or fieldType == protoSchema.DataType.INT64 then
-          value, pos = Protobuf.decode_varint64(buffer, pos)
+          value, pos = pb.decode_varint64(buffer, pos)
         elseif fieldType == protoSchema.DataType.SINT64 then
           local raw
-          raw, pos = Protobuf.decode_varint64(buffer, pos)
-          value = Protobuf.zigzag_decode64(raw)
+          raw, pos = pb.decode_varint64(buffer, pos)
+          value = pb.zigzag_decode64(raw)
         elseif fieldType == protoSchema.DataType.SINT32 then
           local raw
-          raw, pos = Protobuf.decode_varint(buffer, pos)
-          value = Protobuf.zigzag_decode32(raw)
+          raw, pos = pb.decode_varint(buffer, pos)
+          value = pb.zigzag_decode32(raw)
         elseif fieldType == protoSchema.DataType.BOOL then
-          value, pos = Protobuf.decode_varint(buffer, pos)
+          value, pos = pb.decode_varint(buffer, pos)
           value = value ~= 0 -- Convert to boolean
         else
           -- INT32, UINT32, ENUM, etc.
-          value, pos = Protobuf.decode_varint(buffer, pos)
+          value, pos = pb.decode_varint(buffer, pos)
         end
       elseif wire_type == protoSchema.WireType.FIXED64 then
         if fieldType == protoSchema.DataType.DOUBLE then
-          value, pos = Protobuf.decode_double(buffer, pos)
+          value, pos = pb.decode_double(buffer, pos)
         else
           -- FIXED64, SFIXED64
-          value, pos = Protobuf.decode_fixed64(buffer, pos)
+          value, pos = pb.decode_fixed64(buffer, pos)
         end
       elseif wire_type == protoSchema.WireType.FIXED32 then
         if fieldType == protoSchema.DataType.FLOAT then
-          value, pos = Protobuf.decode_float(buffer, pos)
+          value, pos = pb.decode_float(buffer, pos)
         else
           -- FIXED32, SFIXED32
-          value, pos = Protobuf.decode_fixed32(buffer, pos)
+          value, pos = pb.decode_fixed32(buffer, pos)
         end
       elseif wire_type == protoSchema.WireType.LENGTH_DELIMITED then
         local data
-        data, pos = Protobuf.decode_length_delimited(buffer, pos)
+        data, pos = pb.decode_length_delimited(buffer, pos)
         if field.subschema then
-          value = Protobuf.decode(protoSchema, protoSchema.Message[field.subschema], data)
+          value = pb.decode(protoSchema, protoSchema.Message[field.subschema], data)
         else
           value = data
         end
@@ -591,7 +590,7 @@ end
 --- Converts a {high, low} pair to a hexadecimal string.
 --- @param value Int64HighLow The {high_32, low_32} pair.
 --- @return string hex The 16-character hexadecimal string (e.g., "0000180000001000").
-function Protobuf.int64_to_hex(value)
+function pb.int64_to_hex(value)
   return bit64.to_hex(value)
 end
 
@@ -600,14 +599,14 @@ end
 --- @param value Int64HighLow The {high_32, low_32} pair.
 --- @param strict? boolean If true, errors when value exceeds 53-bit precision.
 --- @return integer result The value as a Lua number (may lose precision for large values unless strict).
-function Protobuf.int64_to_number(value, strict)
+function pb.int64_to_number(value, strict)
   return bit64.to_number(value, strict)
 end
 
 --- Creates a {high, low} pair from a Lua number.
 --- @param value number The number to convert.
 --- @return Int64HighLow pair The {high_32, low_32} pair.
-function Protobuf.int64_from_number(value)
+function pb.int64_from_number(value)
   return bit64.from_number(value)
 end
 
@@ -615,23 +614,23 @@ end
 --- @param a Int64HighLow The first {high_32, low_32} pair.
 --- @param b Int64HighLow The second {high_32, low_32} pair.
 --- @return boolean equal True if the values are equal.
-function Protobuf.int64_equals(a, b)
+function pb.int64_equals(a, b)
   return bit64.eq(a, b)
 end
 
 --- Checks if a {high, low} pair is zero.
 --- @param value Int64HighLow The {high_32, low_32} pair.
 --- @return boolean is_zero True if the value is zero.
-function Protobuf.int64_is_zero(value)
+function pb.int64_is_zero(value)
   return bit64.is_zero(value)
 end
 
---- Runs self-tests to verify the functionality of the Protobuf module.
+--- Runs self-tests to verify the functionality of the protobuf module.
 --- Test vectors based on official Protocol Buffers encoding specification.
 --- @see https://protobuf.dev/programming-guides/encoding/
 --- @return boolean success True if all tests passed.
-function Protobuf.selftest()
-  print("Running Protobuf test vectors...")
+function pb.selftest()
+  print("Running protobuf test vectors...")
   local passed = 0
   local failed = 0
 
@@ -757,7 +756,7 @@ function Protobuf.selftest()
   -- VERSION
   -- ============================================================================
 
-  assert_eq(type(Protobuf.version()), "string", "version() returns string")
+  assert_eq(type(pb.version()), "string", "version() returns string")
 
   -- ============================================================================
   -- VARINT ENCODING (official protobuf spec test vectors)
@@ -774,20 +773,20 @@ function Protobuf.selftest()
     { 16384, "808001" }, -- first 3-byte
   }
   for _, t in ipairs(varint_vectors) do
-    assert_bytes(Protobuf.encode_varint(t[1]), t[2], "varint encode " .. t[1])
+    assert_bytes(pb.encode_varint(t[1]), t[2], "varint encode " .. t[1])
   end
 
   -- Varint roundtrip
   for _, v in ipairs({ 0, 1, 127, 128, 150, 300, 16383, 16384, 65535, 2097151, 268435455, 2 ^ 40 + 12345 }) do
-    local enc = Protobuf.encode_varint(v)
-    local dec = Protobuf.decode_varint(enc, 1)
+    local enc = pb.encode_varint(v)
+    local dec = pb.decode_varint(enc, 1)
     assert_eq(dec, v, "varint roundtrip " .. v)
   end
 
   -- Varint64 with Int64 values
   local v64 = bit64.new(0x12345678, 0x9ABCDEF0)
-  local enc64 = Protobuf.encode_varint(v64)
-  local dec64 = Protobuf.decode_varint64(enc64, 1)
+  local enc64 = pb.encode_varint(v64)
+  local dec64 = pb.decode_varint64(enc64, 1)
   assert_int64(dec64, v64[1], v64[2], "varint64 Int64 roundtrip")
   assert_eq(bit64.is_int64(dec64), true, "decode_varint64 returns marked Int64")
 
@@ -802,8 +801,8 @@ function Protobuf.selftest()
     { 0xFFFFFFFF, "FFFFFFFF" },
   }
   for _, t in ipairs(fixed32_vectors) do
-    assert_bytes(Protobuf.encode_fixed32(t[1]), t[2], "fixed32 encode " .. t[1])
-    local dec = Protobuf.decode_fixed32(Protobuf.encode_fixed32(t[1]), 1)
+    assert_bytes(pb.encode_fixed32(t[1]), t[2], "fixed32 encode " .. t[1])
+    local dec = pb.decode_fixed32(pb.encode_fixed32(t[1]), 1)
     assert_eq(dec, t[1], "fixed32 roundtrip " .. t[1])
   end
 
@@ -819,8 +818,8 @@ function Protobuf.selftest()
     { bit64.new(0xFFFFFFFF, 0xFFFFFFFF), "FFFFFFFFFFFFFFFF" },
   }
   for _, t in ipairs(fixed64_vectors) do
-    assert_bytes(Protobuf.encode_fixed64(t[1]), t[2], string.format("fixed64 encode {0x%X, 0x%X}", t[1][1], t[1][2]))
-    local dec = Protobuf.decode_fixed64(Protobuf.encode_fixed64(t[1]), 1)
+    assert_bytes(pb.encode_fixed64(t[1]), t[2], string.format("fixed64 encode {0x%X, 0x%X}", t[1][1], t[1][2]))
+    local dec = pb.decode_fixed64(pb.encode_fixed64(t[1]), 1)
     assert_int64(dec, t[1][1], t[1][2], string.format("fixed64 roundtrip {0x%X, 0x%X}", t[1][1], t[1][2]))
   end
 
@@ -828,11 +827,11 @@ function Protobuf.selftest()
   -- FLOAT ENCODING
   -- ============================================================================
 
-  assert_bytes(Protobuf.encode_float(0), "00000000", "float encode 0")
-  assert_bytes(Protobuf.encode_float(1.0), "0000803F", "float encode 1.0")
+  assert_bytes(pb.encode_float(0), "00000000", "float encode 0")
+  assert_bytes(pb.encode_float(1.0), "0000803F", "float encode 1.0")
 
   for _, v in ipairs({ 0.0, 1.0, -1.0, 3.14159, 100.5, -1234.5678, 1e10, -1e-10 }) do
-    local dec = Protobuf.decode_float(Protobuf.encode_float(v), 1)
+    local dec = pb.decode_float(pb.encode_float(v), 1)
     assert_close(dec, v, 1e-4, "float roundtrip " .. v)
   end
 
@@ -840,11 +839,11 @@ function Protobuf.selftest()
   -- DOUBLE ENCODING
   -- ============================================================================
 
-  assert_bytes(Protobuf.encode_double(0), "0000000000000000", "double encode 0")
-  assert_bytes(Protobuf.encode_double(1.0), "000000000000F03F", "double encode 1.0")
+  assert_bytes(pb.encode_double(0), "0000000000000000", "double encode 0")
+  assert_bytes(pb.encode_double(1.0), "000000000000F03F", "double encode 1.0")
 
   for _, v in ipairs({ 0.0, 1.0, -1.0, 3.141592653589793, 1e100, -1e-100 }) do
-    local dec = Protobuf.decode_double(Protobuf.encode_double(v), 1)
+    local dec = pb.decode_double(pb.encode_double(v), 1)
     assert_close(dec, v, 1e-10, "double roundtrip " .. v)
   end
 
@@ -861,7 +860,7 @@ function Protobuf.selftest()
     { -2147483648, 4294967295 },
   }
   for _, t in ipairs(zigzag32_vectors) do
-    local enc = Protobuf.zigzag_encode32(t[1])
+    local enc = pb.zigzag_encode32(t[1])
     if enc < 0 then
       enc = enc + 0x100000000
     end
@@ -869,7 +868,7 @@ function Protobuf.selftest()
   end
 
   for _, v in ipairs({ 0, 1, -1, 100, -100, 2147483647, -2147483648 }) do
-    local dec = Protobuf.zigzag_decode32(Protobuf.zigzag_encode32(v))
+    local dec = pb.zigzag_decode32(pb.zigzag_encode32(v))
     assert_eq(dec, v, "zigzag32 roundtrip " .. v)
   end
 
@@ -879,7 +878,7 @@ function Protobuf.selftest()
     { bit64.new(0, 1), bit64.new(0, 2) },
   }
   for _, t in ipairs(zigzag64_vectors) do
-    local enc = Protobuf.zigzag_encode64(t[1])
+    local enc = pb.zigzag_encode64(t[1])
     assert_int64(enc, t[2][1], t[2][2], string.format("zigzag64 encode {0x%X, 0x%X}", t[1][1], t[1][2]))
   end
 
@@ -891,7 +890,7 @@ function Protobuf.selftest()
     bit64.new(0x7FFFFFFF, 0xFFFFFFFF),
   }
   for _, v in ipairs(zigzag64_roundtrip) do
-    local dec = Protobuf.zigzag_decode64(Protobuf.zigzag_encode64(v))
+    local dec = pb.zigzag_decode64(pb.zigzag_encode64(v))
     assert_int64(dec, v[1], v[2], string.format("zigzag64 roundtrip {0x%X, 0x%X}", v[1], v[2]))
   end
 
@@ -899,10 +898,10 @@ function Protobuf.selftest()
   -- LENGTH-DELIMITED ENCODING
   -- ============================================================================
 
-  assert_bytes(Protobuf.encode_length_delimited("testing"), "0774657374696E67", "length_delimited 'testing'")
+  assert_bytes(pb.encode_length_delimited("testing"), "0774657374696E67", "length_delimited 'testing'")
 
   for _, s in ipairs({ "", "hello", string.rep("x", 1000) }) do
-    local dec = Protobuf.decode_length_delimited(Protobuf.encode_length_delimited(s), 1)
+    local dec = pb.decode_length_delimited(pb.encode_length_delimited(s), 1)
     assert_eq(dec, s, "length_delimited roundtrip len=" .. #s)
   end
 
@@ -910,19 +909,19 @@ function Protobuf.selftest()
   -- INT64 UTILITIES
   -- ============================================================================
 
-  assert_eq(Protobuf.int64_to_hex({ 0x12345678, 0x9ABCDEF0 }), "123456789ABCDEF0", "int64_to_hex")
+  assert_eq(pb.int64_to_hex({ 0x12345678, 0x9ABCDEF0 }), "123456789ABCDEF0", "int64_to_hex")
 
   local num = 123456789012345
-  assert_eq(Protobuf.int64_to_number(Protobuf.int64_from_number(num)), num, "int64 from/to number roundtrip")
-  assert_eq(bit64.is_int64(Protobuf.int64_from_number(num)), true, "int64_from_number returns marked Int64")
+  assert_eq(pb.int64_to_number(pb.int64_from_number(num)), num, "int64 from/to number roundtrip")
+  assert_eq(bit64.is_int64(pb.int64_from_number(num)), true, "int64_from_number returns marked Int64")
 
-  assert_eq(Protobuf.int64_equals({ 1, 2 }, { 1, 2 }), true, "int64_equals same")
-  assert_eq(Protobuf.int64_equals({ 1, 2 }, { 1, 3 }), false, "int64_equals diff")
-  assert_eq(Protobuf.int64_is_zero({ 0, 0 }), true, "int64_is_zero true")
-  assert_eq(Protobuf.int64_is_zero({ 0, 1 }), false, "int64_is_zero false")
+  assert_eq(pb.int64_equals({ 1, 2 }, { 1, 2 }), true, "int64_equals same")
+  assert_eq(pb.int64_equals({ 1, 2 }, { 1, 3 }), false, "int64_equals diff")
+  assert_eq(pb.int64_is_zero({ 0, 0 }), true, "int64_is_zero true")
+  assert_eq(pb.int64_is_zero({ 0, 1 }), false, "int64_is_zero false")
 
   assert_error(function()
-    Protobuf.int64_to_number(bit64.new(0x00200000, 0), true)
+    pb.int64_to_number(bit64.new(0x00200000, 0), true)
   end, "53%-bit", "int64_to_number strict mode rejects >53-bit")
 
   -- Int64 vs array distinction
@@ -938,76 +937,76 @@ function Protobuf.selftest()
   -- Bool
   local boolSchema = make_schema("Bool", "flag", Schema.DataType.BOOL, Schema.WireType.VARINT)
   for _, v in ipairs({ true, false }) do
-    local dec = Protobuf.decode(Schema, boolSchema, Protobuf.encode(Schema, boolSchema, { flag = v }))
+    local dec = pb.decode(Schema, boolSchema, pb.encode(Schema, boolSchema, { flag = v }))
     assert_eq(dec.flag, v, "encode/decode bool " .. tostring(v))
   end
 
   -- Int32
   local int32Schema = make_schema("Int32", "value", Schema.DataType.INT32, Schema.WireType.VARINT)
   for _, v in ipairs({ 0, 1, 127, 128, 65535, 2147483647 }) do
-    local dec = Protobuf.decode(Schema, int32Schema, Protobuf.encode(Schema, int32Schema, { value = v }))
+    local dec = pb.decode(Schema, int32Schema, pb.encode(Schema, int32Schema, { value = v }))
     assert_eq(dec.value, v, "encode/decode int32 " .. v)
   end
 
   -- Uint64
   local uint64Schema = make_schema("Uint64", "value", Schema.DataType.UINT64, Schema.WireType.VARINT)
   local u64 = bit64.new(0x00001800, 0x00001000)
-  local decU64 = Protobuf.decode(Schema, uint64Schema, Protobuf.encode(Schema, uint64Schema, { value = u64 }))
+  local decU64 = pb.decode(Schema, uint64Schema, pb.encode(Schema, uint64Schema, { value = u64 }))
   assert_int64(decU64.value, u64[1], u64[2], "encode/decode uint64")
 
   -- Sint32 (zigzag)
   local sint32Schema = make_schema("Sint32", "value", Schema.DataType.SINT32, Schema.WireType.VARINT)
   for _, v in ipairs({ 0, 1, -1, 100, -100, 2147483647, -2147483648 }) do
-    local dec = Protobuf.decode(Schema, sint32Schema, Protobuf.encode(Schema, sint32Schema, { value = v }))
+    local dec = pb.decode(Schema, sint32Schema, pb.encode(Schema, sint32Schema, { value = v }))
     assert_eq(dec.value, v, "encode/decode sint32 " .. v)
   end
 
   -- Sint64 (zigzag)
   local sint64Schema = make_schema("Sint64", "value", Schema.DataType.SINT64, Schema.WireType.VARINT)
   for _, t in ipairs({ { bit64.new(0, 0), "0" }, { bit64.new(0, 1), "1" }, { bit64.new(0xFFFFFFFF, 0xFFFFFFFF), "-1" } }) do
-    local dec = Protobuf.decode(Schema, sint64Schema, Protobuf.encode(Schema, sint64Schema, { value = t[1] }))
+    local dec = pb.decode(Schema, sint64Schema, pb.encode(Schema, sint64Schema, { value = t[1] }))
     assert_int64(dec.value, t[1][1], t[1][2], "encode/decode sint64 " .. t[2])
   end
 
   -- String
   local stringSchema = make_schema("String", "text", Schema.DataType.STRING, Schema.WireType.LENGTH_DELIMITED)
   for _, v in ipairs({ "", "hello", "unicode: \xC3\xA9", string.rep("x", 1000) }) do
-    local dec = Protobuf.decode(Schema, stringSchema, Protobuf.encode(Schema, stringSchema, { text = v }))
+    local dec = pb.decode(Schema, stringSchema, pb.encode(Schema, stringSchema, { text = v }))
     assert_eq(dec.text, v, "encode/decode string len=" .. #v)
   end
 
   -- Float
   local floatSchema = make_schema("Float", "value", Schema.DataType.FLOAT, Schema.WireType.FIXED32)
   for _, v in ipairs({ 0.0, 1.0, -1.0, 3.14159, 1e10 }) do
-    local dec = Protobuf.decode(Schema, floatSchema, Protobuf.encode(Schema, floatSchema, { value = v }))
+    local dec = pb.decode(Schema, floatSchema, pb.encode(Schema, floatSchema, { value = v }))
     assert_close(dec.value, v, 1e-4, "encode/decode float " .. v)
   end
 
   -- Double
   local doubleSchema = make_schema("Double", "value", Schema.DataType.DOUBLE, Schema.WireType.FIXED64)
   for _, v in ipairs({ 0.0, 1.0, -1.0, 3.141592653589793, 1e100 }) do
-    local dec = Protobuf.decode(Schema, doubleSchema, Protobuf.encode(Schema, doubleSchema, { value = v }))
+    local dec = pb.decode(Schema, doubleSchema, pb.encode(Schema, doubleSchema, { value = v }))
     assert_close(dec.value, v, 1e-10, "encode/decode double " .. v)
   end
 
   -- Fixed32
   local fixed32FieldSchema = make_schema("Fixed32", "value", Schema.DataType.FIXED32, Schema.WireType.FIXED32)
   for _, v in ipairs({ 0, 1, 255, 0xFFFFFFFF }) do
-    local dec = Protobuf.decode(Schema, fixed32FieldSchema, Protobuf.encode(Schema, fixed32FieldSchema, { value = v }))
+    local dec = pb.decode(Schema, fixed32FieldSchema, pb.encode(Schema, fixed32FieldSchema, { value = v }))
     assert_eq(dec.value, v, "encode/decode fixed32 " .. v)
   end
 
   -- Fixed64
   local fixed64FieldSchema = make_schema("Fixed64", "value", Schema.DataType.FIXED64, Schema.WireType.FIXED64)
   for _, v in ipairs({ bit64.new(0, 0), bit64.new(0, 1), bit64.new(0xFFFFFFFF, 0xFFFFFFFF) }) do
-    local dec = Protobuf.decode(Schema, fixed64FieldSchema, Protobuf.encode(Schema, fixed64FieldSchema, { value = v }))
+    local dec = pb.decode(Schema, fixed64FieldSchema, pb.encode(Schema, fixed64FieldSchema, { value = v }))
     assert_int64(dec.value, v[1], v[2], string.format("encode/decode fixed64 {0x%X, 0x%X}", v[1], v[2]))
   end
 
   -- Enum
   local enumSchema = make_schema("Enum", "status", Schema.DataType.ENUM, Schema.WireType.VARINT)
   for _, v in ipairs({ 0, 1, 2, 100 }) do
-    local dec = Protobuf.decode(Schema, enumSchema, Protobuf.encode(Schema, enumSchema, { status = v }))
+    local dec = pb.decode(Schema, enumSchema, pb.encode(Schema, enumSchema, { status = v }))
     assert_eq(dec.status, v, "encode/decode enum " .. v)
   end
 
@@ -1018,7 +1017,7 @@ function Protobuf.selftest()
   local repeatedSchema =
     make_schema("Repeated", "values", Schema.DataType.INT32, Schema.WireType.VARINT, { repeated = true })
   local vals = { 1, 2, 3, 100, 200 }
-  local decR = Protobuf.decode(Schema, repeatedSchema, Protobuf.encode(Schema, repeatedSchema, { values = vals }))
+  local decR = pb.decode(Schema, repeatedSchema, pb.encode(Schema, repeatedSchema, { values = vals }))
   assert_eq(#decR.values, #vals, "repeated field count")
   for i, v in ipairs(vals) do
     assert_eq(decR.values[i], v, "repeated field[" .. i .. "]")
@@ -1038,7 +1037,7 @@ function Protobuf.selftest()
   }
   local outerSchema =
     make_schema("Outer", "inner", Schema.DataType.MESSAGE, Schema.WireType.LENGTH_DELIMITED, { subschema = "Inner" })
-  local decO = Protobuf.decode(Schema, outerSchema, Protobuf.encode(Schema, outerSchema, { inner = { id = 42 } }))
+  local decO = pb.decode(Schema, outerSchema, pb.encode(Schema, outerSchema, { inner = { id = 42 } }))
   assert_eq(decO.inner.id, 42, "nested message single level")
 
   -- Deep nesting (3 levels)
@@ -1076,7 +1075,7 @@ function Protobuf.selftest()
     },
   }
   local deepMsg = { id = 100, child = { name = "level2", child = { val = "deepest" } } }
-  local decD = Protobuf.decode(Schema, l1Schema, Protobuf.encode(Schema, l1Schema, deepMsg))
+  local decD = pb.decode(Schema, l1Schema, pb.encode(Schema, l1Schema, deepMsg))
   assert_eq(decD.id, 100, "deep nested level1.id")
   assert_eq(decD.child.name, "level2", "deep nested level2.name")
   assert_eq(decD.child.child.val, "deepest", "deep nested level3.val")
@@ -1105,7 +1104,7 @@ function Protobuf.selftest()
     },
   }
   local orderMsg = { id = 123, items = { { name = "A", qty = 5 }, { name = "B", qty = 3 } } }
-  local decOrder = Protobuf.decode(Schema, orderSchema, Protobuf.encode(Schema, orderSchema, orderMsg))
+  local decOrder = pb.decode(Schema, orderSchema, pb.encode(Schema, orderSchema, orderMsg))
   assert_eq(decOrder.id, 123, "repeated nested order.id")
   assert_eq(#decOrder.items, 2, "repeated nested item count")
   assert_eq(decOrder.items[1].name, "A", "repeated nested item[1].name")
@@ -1141,7 +1140,7 @@ function Protobuf.selftest()
   }
   local personMsg =
     { name = "Alice", home = { street = "123 Home", city = "H" }, work = { street = "456 Work", city = "W" } }
-  local decP = Protobuf.decode(Schema, personSchema, Protobuf.encode(Schema, personSchema, personMsg))
+  local decP = pb.decode(Schema, personSchema, pb.encode(Schema, personSchema, personMsg))
   assert_eq(decP.name, "Alice", "multi-nested person.name")
   assert_eq(decP.home.city, "H", "multi-nested home.city")
   assert_eq(decP.work.city, "W", "multi-nested work.city")
@@ -1151,7 +1150,7 @@ function Protobuf.selftest()
   -- ============================================================================
 
   -- Empty message
-  local emptyDec = Protobuf.decode(Schema, int32Schema, Protobuf.encode(Schema, int32Schema, {}))
+  local emptyDec = pb.decode(Schema, int32Schema, pb.encode(Schema, int32Schema, {}))
   assert_eq(emptyDec.value, nil, "empty message has nil field")
 
   -- Unknown field skipping
@@ -1170,8 +1169,8 @@ function Protobuf.selftest()
       [1] = { name = "a", type = Schema.DataType.INT32, wireType = Schema.WireType.VARINT },
     },
   }
-  local enc2 = Protobuf.encode(Schema, twoField, { a = 123, b = 456 })
-  local dec1 = Protobuf.decode(Schema, oneField, enc2)
+  local enc2 = pb.encode(Schema, twoField, { a = 123, b = 456 })
+  local dec1 = pb.decode(Schema, oneField, enc2)
   assert_eq(dec1.a, 123, "unknown field skipped, known preserved")
 
   -- ============================================================================
@@ -1179,16 +1178,16 @@ function Protobuf.selftest()
   -- ============================================================================
 
   assert_error(function()
-    Protobuf.encode(Schema, repeatedSchema, { values = 123 })
+    pb.encode(Schema, repeatedSchema, { values = 123 })
   end, "non%-list", "error: non-list for repeated field")
 
   assert_error(function()
-    Protobuf.encode(Schema, int32Schema, { value = { 1, 2, 3 } })
+    pb.encode(Schema, int32Schema, { value = { 1, 2, 3 } })
   end, "not repeated", "error: list for non-repeated field")
 
   local noSubSchema = make_schema("NoSub", "nested", Schema.DataType.MESSAGE, Schema.WireType.LENGTH_DELIMITED)
   assert_error(function()
-    Protobuf.encode(Schema, noSubSchema, { nested = { foo = 1 } })
+    pb.encode(Schema, noSubSchema, { nested = { foo = 1 } })
   end, "no subschema", "error: nested message without subschema")
 
   -- ============================================================================
@@ -1198,4 +1197,4 @@ function Protobuf.selftest()
   return failed == 0
 end
 
-return Protobuf
+return pb
