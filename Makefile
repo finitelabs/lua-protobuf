@@ -1,6 +1,9 @@
 # Luarocks path for amalg and other tools
 LUAROCKS_PATH := $(shell luarocks path --lr-path 2>/dev/null)
 
+# Lua path for local modules (src, vendor)
+LUA_PATH_LOCAL := ./?.lua;./?/init.lua;./src/?.lua;./src/?/init.lua;./vendor/?.lua;$(LUAROCKS_PATH)
+
 # Default target
 .PHONY: all
 all: format lint test build
@@ -29,7 +32,7 @@ build/amalg.cache: src/protobuf/init.lua
 	@echo "Generating amalgamation cache..."
 	@mkdir -p build
 	@if command -v amalg.lua >/dev/null 2>&1; then \
-		LUA_PATH="./?.lua;./?/init.lua;./src/?.lua;./src/?/init.lua;$(LUAROCKS_PATH)" lua -lamalg src/protobuf/init.lua && mv amalg.cache build || exit 1; \
+		LUA_PATH="$(LUA_PATH_LOCAL)" lua -lamalg src/protobuf/init.lua && mv amalg.cache build || exit 1; \
 		echo "Generated amalg.cache"; \
 	else \
 		echo "Error: amalg not found."; \
@@ -43,9 +46,9 @@ build/amalg.cache: src/protobuf/init.lua
 build: build/amalg.cache
 	@echo "Building single-file distribution..."
 	@if command -v amalg.lua >/dev/null 2>&1; then \
-		LUA_PATH="./?.lua;./?/init.lua;./src/?.lua;./src/?/init.lua;$(LUAROCKS_PATH)" amalg.lua -o build/protobuf.lua -C ./build/amalg.cache || exit 1;\
+		LUA_PATH="$(LUA_PATH_LOCAL)" amalg.lua -o build/protobuf.lua -C ./build/amalg.cache || exit 1;\
 		echo "Built build/protobuf.lua"; \
-		LUA_PATH="./?.lua;./?/init.lua;./src/?.lua;./src/?/init.lua;$(LUAROCKS_PATH)" amalg.lua -o build/protobuf-core.lua -C ./build/amalg.cache -i "vendor%." || exit 1;\
+		LUA_PATH="$(LUA_PATH_LOCAL)" amalg.lua -o build/protobuf-core.lua -C ./build/amalg.cache -i "bitn" || exit 1;\
 		echo "Built build/protobuf-core.lua (no vendor dependencies)"; \
 		VERSION=$$(git describe --exact-match --tags 2>/dev/null || echo "dev"); \
 		if [ "$$VERSION" != "dev" ]; then \
@@ -210,26 +213,28 @@ help:
 	@echo "Lua Protobuf Library - Makefile targets"
 	@echo ""
 	@echo "Testing:"
-	@echo "  make test              - Run all tests"
-	@echo "  make test-<name>       - Run specific test (e.g., make test-protobuf)"
-	@echo "  make test-matrix       - Run test matrix across Lua versions"
+	@echo "  make test               - Run all tests"
+	@echo "  make test-<name>        - Run specific test (e.g., make test-protobuf)"
+	@echo "  make test-matrix        - Run tests across all Lua versions"
+	@echo "  make test-matrix-<name> - Run specific test across all Lua versions"
 	@echo ""
 	@echo "Building:"
-	@echo "  make build             - Build single-file distribution"
+	@echo "  make build              - Build single-file distributions"
 	@echo ""
 	@echo "Schema Generation:"
-	@echo "  make setup-schema-generator                     - Setup Python venv for schema generator"
-	@echo "  make gen-schema PROTO=<file> OUTPUT=<file>      - Generate Lua schema from proto file(s)"
-	@echo "  make gen-types                                  - Regenerate src/protobuf/types.lua"
-	@echo "  make check-types                                - Verify types.lua matches empty.proto"
+	@echo "  make setup-schema-generator                - Setup Python venv for schema generator"
+	@echo "  make gen-schema PROTO=<file> OUTPUT=<file> - Generate Lua schema from proto file(s)"
+	@echo "  make gen-types                             - Regenerate src/protobuf/types.lua"
+	@echo "  make check-types                           - Verify types.lua matches empty.proto"
 	@echo ""
 	@echo "Code Quality:"
-	@echo "  make format            - Format all code (Lua)"
-	@echo "  make format-check      - Check code formatting"
-	@echo "  make lint              - Lint code with luacheck"
+	@echo "  make check              - Run format-check, lint, and check-types"
+	@echo "  make format             - Format code with stylua"
+	@echo "  make format-check       - Check code formatting"
+	@echo "  make lint               - Lint code with luacheck"
 	@echo ""
 	@echo "Setup:"
-	@echo "  make install-deps      - Install all development dependencies"
-	@echo "  make clean             - Remove generated files"
+	@echo "  make install-deps       - Install development dependencies"
+	@echo "  make clean              - Remove generated files"
 	@echo ""
-	@echo "  make help              - Show this help"
+	@echo "  make help               - Show this help"

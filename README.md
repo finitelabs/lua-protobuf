@@ -24,7 +24,7 @@ Download a pre-built single-file module from the
 
 - **`protobuf.lua`** - Complete bundle with all dependencies included (zero
   external dependencies)
-- **`protobuf-core.lua`** - Core library only, requires `vendor.bitn` to be
+- **`protobuf-core.lua`** - Core library only, requires `bitn` to be
   installed separately
 
 ### Option 2: From Source
@@ -137,19 +137,48 @@ local num = protobuf.int64_to_number({0x00000001, 0xFFFFFFFF})
 local hex = protobuf.int64_to_hex({0x12345678, 0x9ABCDEF0})
 ```
 
-## Testing
+## Development
 
-Run the test suite:
+### Setup
 
 ```bash
-# Run all tests
-make test
+# Install all development dependencies (stylua, luacheck, amalg, protoc, Python venv)
+make install-deps
+```
 
-# Run specific test suite
-make test-protobuf
+### Testing
 
-# Run test matrix across all Lua versions
-make test-matrix
+```bash
+make test                # Run all tests
+make test-protobuf       # Run specific module tests
+make test-matrix         # Run tests across all Lua versions
+make test-matrix-protobuf # Run specific module across all Lua versions
+
+# Or use scripts directly with custom Lua binary
+LUA_BINARY=lua5.1 ./run_tests.sh
+```
+
+### Code Quality
+
+```bash
+make check               # Run format check, lint, and check-types
+make format              # Format code with stylua
+make format-check        # Check formatting without modifying
+make lint                # Run luacheck
+make check-types         # Verify types.lua matches empty.proto
+```
+
+### Building
+
+```bash
+make build               # Build single-file distributions (build/protobuf.lua, build/protobuf-core.lua)
+make clean               # Remove generated files
+```
+
+### Help
+
+```bash
+make help                # Show all available targets
 ```
 
 ## Current Limitations
