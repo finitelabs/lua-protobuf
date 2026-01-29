@@ -8,6 +8,27 @@ local bitn = require("bitn")
 local bit32 = bitn.bit32
 local bit64 = bitn.bit64
 
+-- Cache methods as locals for faster access
+local bit32_raw_arshift = bit32.raw_arshift
+local bit32_raw_band = bit32.raw_band
+local bit32_raw_bor = bit32.raw_bor
+local bit32_raw_bxor = bit32.raw_bxor
+local bit32_raw_lshift = bit32.raw_lshift
+local bit32_raw_rshift = bit32.raw_rshift
+local bit32_to_unsigned = bit32.to_unsigned
+local bit64_eq = bit64.eq
+local bit64_from_number = bit64.from_number
+local bit64_is_int64 = bit64.is_int64
+local bit64_is_zero = bit64.is_zero
+local bit64_new = bit64.new
+local bit64_raw_arshift = bit64.raw_arshift
+local bit64_raw_bor = bit64.raw_bor
+local bit64_raw_bxor = bit64.raw_bxor
+local bit64_raw_lshift = bit64.raw_lshift
+local bit64_raw_rshift = bit64.raw_rshift
+local bit64_to_hex = bit64.to_hex
+local bit64_to_number = bit64.to_number
+
 --- Check if a value is a list (sequential table).
 --- @param t any The value to check.
 --- @return boolean is_list True if the value is a list.
@@ -45,17 +66,17 @@ function pb.encode_varint(value)
   end
 
   -- If value is a table, assume it's {high, low} format for 64-bit
-  if bit64.is_int64(value) then
+  if bit64_is_int64(value) then
     --- @cast value Int64HighLow
     local bytes = {}
-    local v = bit64.new(value[1], value[2]) -- Copy the input
+    local v = bit64_new(value[1], value[2]) -- Copy the input
 
     repeat
       -- Extract low 7 bits
       local byte = v[2] % 128
 
       -- Right shift by 7 bits using bit64
-      v = bit64.shr(v, 7)
+      v = bit64_raw_rshift(v, 7)
 
       -- Set continue bit if more bytes remain
       if v[1] ~= 0 or v[2] ~= 0 then
@@ -72,10 +93,10 @@ function pb.encode_varint(value)
   if value >= 0 and value < 0x100000000 then
     local bytes = {}
     repeat
-      local byte = bit32.band(value, 0x7F)
-      value = bit32.rshift(value, 7)
+      local byte = bit32_raw_band(value, 0x7F)
+      value = bit32_raw_rshift(value, 7)
       if value > 0 then
-        byte = bit32.bor(byte, 0x80)
+        byte = bit32_raw_bor(byte, 0x80)
       end
       table.insert(bytes, string.char(byte))
     until value == 0
@@ -85,12 +106,12 @@ function pb.encode_varint(value)
   -- For large values (> 32 bits), convert to {high, low} and use bit64
   local low_32 = value % 0x100000000
   local high_32 = math.floor(value / 0x100000000)
-  local v = bit64.new(high_32, low_32)
+  local v = bit64_new(high_32, low_32)
   local bytes = {}
 
   repeat
     local byte = v[2] % 128
-    v = bit64.shr(v, 7)
+    v = bit64_raw_rshift(v, 7)
     if v[1] ~= 0 or v[2] ~= 0 then
       byte = byte + 0x80
     end
@@ -108,20 +129,20 @@ end
 --- @return Int64HighLow value The decoded value as {high_32, low_32}.
 --- @return integer new_pos The new position in the buffer after decoding.
 function pb.decode_varint64(buffer, pos)
-  local result = bit64.new(0, 0)
+  local result = bit64_new(0, 0)
   local shift = 0
   local byte
 
   repeat
     byte = string.byte(buffer, pos)
-    local value_bits = bit32.band(byte, 0x7F)
+    local value_bits = bit32_raw_band(byte, 0x7F)
 
     -- Create a Int64 for this 7-bit chunk and shift it
-    local chunk = bit64.new(0, value_bits)
-    local shifted = bit64.lsl(chunk, shift)
+    local chunk = bit64_new(0, value_bits)
+    local shifted = bit64_raw_lshift(chunk, shift)
 
     -- OR with result
-    result = bit64.bor(result, shifted)
+    result = bit64_raw_bor(result, shifted)
 
     shift = shift + 7
     pos = pos + 1
@@ -170,7 +191,7 @@ end
 --- @return string bytes The encoded 8-byte sequence.
 function pb.encode_fixed64(value)
   local high, low
-  if bit64.is_int64(value) then
+  if bit64_is_int64(value) then
     --- @cast value Int64HighLow
     high, low = value[1], value[2]
   else
@@ -199,7 +220,7 @@ function pb.decode_fixed64(buffer, pos)
   local b1, b2, b3, b4, b5, b6, b7, b8 = string.byte(buffer, pos, pos + 7)
   local low = b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
   local high = b5 + b6 * 256 + b7 * 65536 + b8 * 16777216
-  return bit64.new(high, low), pos + 8
+  return bit64_new(high, low), pos + 8
 end
 
 --- Encodes a floating-point number into a 4-byte IEEE 754 single-precision format.
@@ -233,8 +254,8 @@ function pb.encode_float(value)
 
   local b1 = m % 256
   local b2 = math.floor(m / 256) % 256
-  local b3 = bit32.bor(math.floor(m / 65536), bit32.lshift(e % 2, 7))
-  local b4 = bit32.bor(bit32.rshift(e, 1), bit32.lshift(sign, 7))
+  local b3 = bit32_raw_bor(math.floor(m / 65536), bit32_raw_lshift(e % 2, 7))
+  local b4 = bit32_raw_bor(bit32_raw_rshift(e, 1), bit32_raw_lshift(sign, 7))
 
   return string.char(b1, b2, b3, b4)
 end
@@ -247,9 +268,9 @@ end
 function pb.decode_float(buffer, pos)
   local b1, b2, b3, b4 = string.byte(buffer, pos, pos + 3)
 
-  local sign = bit32.rshift(b4, 7)
-  local e = bit32.lshift(bit32.band(b4, 0x7F), 1) + bit32.rshift(b3, 7)
-  local m = bit32.band(b3, 0x7F) * 65536 + b2 * 256 + b1
+  local sign = bit32_raw_rshift(b4, 7)
+  local e = bit32_raw_lshift(bit32_raw_band(b4, 0x7F), 1) + bit32_raw_rshift(b3, 7)
+  local m = bit32_raw_band(b3, 0x7F) * 65536 + b2 * 256 + b1
 
   if e == 0 and m == 0 then
     return 0, pos + 4
@@ -301,8 +322,8 @@ function pb.encode_double(value)
   local b4 = math.floor(m_low / 16777216) % 256
   local b5 = m_high % 256
   local b6 = math.floor(m_high / 256) % 256
-  local b7 = bit32.bor(math.floor(m_high / 65536), bit32.lshift(e % 16, 4))
-  local b8 = bit32.bor(bit32.rshift(e, 4), bit32.lshift(sign, 7))
+  local b7 = bit32_raw_bor(math.floor(m_high / 65536), bit32_raw_lshift(e % 16, 4))
+  local b8 = bit32_raw_bor(bit32_raw_rshift(e, 4), bit32_raw_lshift(sign, 7))
 
   return string.char(b1, b2, b3, b4, b5, b6, b7, b8)
 end
@@ -315,9 +336,9 @@ end
 function pb.decode_double(buffer, pos)
   local b1, b2, b3, b4, b5, b6, b7, b8 = string.byte(buffer, pos, pos + 7)
 
-  local sign = bit32.rshift(b8, 7)
-  local e = bit32.lshift(bit32.band(b8, 0x7F), 4) + bit32.rshift(b7, 4)
-  local m_high = bit32.band(b7, 0x0F) * 65536 + b6 * 256 + b5
+  local sign = bit32_raw_rshift(b8, 7)
+  local e = bit32_raw_lshift(bit32_raw_band(b8, 0x7F), 4) + bit32_raw_rshift(b7, 4)
+  local m_high = bit32_raw_band(b7, 0x0F) * 65536 + b6 * 256 + b5
   local m_low = b4 * 16777216 + b3 * 65536 + b2 * 256 + b1
   local m = m_high * 0x100000000 + m_low
 
@@ -341,14 +362,16 @@ end
 --- @param value integer The signed integer to encode.
 --- @return integer encoded The zigzag-encoded value.
 function pb.zigzag_encode32(value)
-  return bit32.bxor(bit32.lshift(value, 1), bit32.arshift(value, 31))
+  -- Raw ops return signed; convert to unsigned for encode_varint
+  local result = bit32_raw_bxor(bit32_raw_lshift(value, 1), bit32_raw_arshift(value, 31))
+  return bit32_to_unsigned(result)
 end
 
 --- Decodes a zigzag-encoded 32-bit integer.
 --- @param value integer The zigzag-encoded value.
 --- @return integer decoded The signed integer.
 function pb.zigzag_decode32(value)
-  local result = bit32.bxor(bit32.rshift(value, 1), -bit32.band(value, 1))
+  local result = bit32_raw_bxor(bit32_raw_rshift(value, 1), -bit32_raw_band(value, 1))
   -- Convert unsigned to signed if high bit is set
   if result >= 0x80000000 then
     result = result - 0x100000000
@@ -361,9 +384,9 @@ end
 --- @return Int64HighLow encoded The zigzag-encoded value as {high, low}.
 function pb.zigzag_encode64(value)
   -- (n << 1) ^ (n >> 63)
-  local shifted = bit64.lsl(value, 1)
-  local sign_extended = bit64.asr(value, 63)
-  return bit64.bxor(shifted, sign_extended)
+  local shifted = bit64_raw_lshift(value, 1)
+  local sign_extended = bit64_raw_arshift(value, 63)
+  return bit64_raw_bxor(shifted, sign_extended)
 end
 
 --- Decodes a zigzag-encoded 64-bit integer.
@@ -371,16 +394,16 @@ end
 --- @return Int64HighLow decoded The signed 64-bit integer as {high, low}.
 function pb.zigzag_decode64(value)
   -- (n >>> 1) ^ -(n & 1)
-  local shifted = bit64.shr(value, 1)
-  local sign_bit = bit64.new(0, bit32.band(value[2], 1))
+  local shifted = bit64_raw_rshift(value, 1)
+  local sign_bit = bit32_raw_band(value[2], 1)
   -- Negate: if sign_bit is 1, result is all 1s, else all 0s
   local neg_sign
-  if sign_bit[2] == 1 then
-    neg_sign = bit64.new(0xFFFFFFFF, 0xFFFFFFFF)
+  if sign_bit == 1 then
+    neg_sign = bit64_new(0xFFFFFFFF, 0xFFFFFFFF)
   else
-    neg_sign = bit64.new(0, 0)
+    neg_sign = bit64_new(0, 0)
   end
-  return bit64.bxor(shifted, neg_sign)
+  return bit64_raw_bxor(shifted, neg_sign)
 end
 
 --- Encodes a length-delimited field (string or nested message).
@@ -413,19 +436,20 @@ function pb.encode(protoSchema, messageSchema, message)
     local values = message[field.name]
     if values ~= nil then
       if field.repeated then
-        if not is_list(values) or bit64.is_int64(values) then
+        if not is_list(values) or bit64_is_int64(values) then
           error("Field '" .. field.name .. "' is repeated but received a non-list value.")
         end
       else
-        if is_list(values) and not bit64.is_int64(values) then
+        if is_list(values) and not bit64_is_int64(values) then
           error("Field '" .. field.name .. "' is not repeated but received a list.")
         end
         values = { values } -- Wrap single value in a list for uniform processing
       end
       for _, value in ipairs(values) do
         -- Compute the key (field number and wire type)
+        -- Use to_unsigned since large field numbers produce high-bit-set results
         --- @cast field.wireType integer
-        local key = bit32.lshift(field_number, 3) + field.wireType
+        local key = bit32_to_unsigned(bit32_raw_lshift(field_number, 3)) + field.wireType
         buffer = buffer .. pb.encode_varint(key)
 
         local fieldType = field.type
@@ -494,8 +518,8 @@ function pb.decode(protoSchema, messageSchema, buffer)
   while pos <= #buffer do
     -- Decode the key (field number and wire type)
     key, pos = pb.decode_varint(buffer, pos)
-    local field_number = bit32.rshift(key, 3)
-    local wire_type = bit32.band(key, 0x7)
+    local field_number = bit32_raw_rshift(key, 3)
+    local wire_type = bit32_raw_band(key, 0x7)
 
     -- Find the corresponding field in the schema
     local field = messageSchema.fields[field_number]
@@ -591,7 +615,7 @@ end
 --- @param value Int64HighLow The {high_32, low_32} pair.
 --- @return string hex The 16-character hexadecimal string (e.g., "0000180000001000").
 function pb.int64_to_hex(value)
-  return bit64.to_hex(value)
+  return bit64_to_hex(value)
 end
 
 --- Converts a {high, low} pair to a Lua number.
@@ -600,14 +624,14 @@ end
 --- @param strict? boolean If true, errors when value exceeds 53-bit precision.
 --- @return integer result The value as a Lua number (may lose precision for large values unless strict).
 function pb.int64_to_number(value, strict)
-  return bit64.to_number(value, strict)
+  return bit64_to_number(value, strict)
 end
 
 --- Creates a {high, low} pair from a Lua number.
 --- @param value number The number to convert.
 --- @return Int64HighLow pair The {high_32, low_32} pair.
 function pb.int64_from_number(value)
-  return bit64.from_number(value)
+  return bit64_from_number(value)
 end
 
 --- Checks if two {high, low} pairs are equal.
@@ -615,14 +639,14 @@ end
 --- @param b Int64HighLow The second {high_32, low_32} pair.
 --- @return boolean equal True if the values are equal.
 function pb.int64_equals(a, b)
-  return bit64.eq(a, b)
+  return bit64_eq(a, b)
 end
 
 --- Checks if a {high, low} pair is zero.
 --- @param value Int64HighLow The {high_32, low_32} pair.
 --- @return boolean is_zero True if the value is zero.
 function pb.int64_is_zero(value)
-  return bit64.is_zero(value)
+  return bit64_is_zero(value)
 end
 
 --- Runs self-tests to verify the functionality of the protobuf module.
@@ -784,11 +808,32 @@ function pb.selftest()
   end
 
   -- Varint64 with Int64 values
-  local v64 = bit64.new(0x12345678, 0x9ABCDEF0)
+  local v64 = bit64_new(0x12345678, 0x9ABCDEF0)
   local enc64 = pb.encode_varint(v64)
   local dec64 = pb.decode_varint64(enc64, 1)
   assert_int64(dec64, v64[1], v64[2], "varint64 Int64 roundtrip")
-  assert_eq(bit64.is_int64(dec64), true, "decode_varint64 returns marked Int64")
+  assert_eq(bit64_is_int64(dec64), true, "decode_varint64 returns marked Int64")
+
+  -- Varint 32-bit boundary values (tests raw bit op signed/unsigned handling)
+  for _, v in ipairs({ 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF }) do
+    local enc = pb.encode_varint(v)
+    local dec = pb.decode_varint(enc, 1)
+    assert_eq(dec, v, string.format("varint 0x%X roundtrip", v))
+  end
+
+  -- Varint64 with high bits set (tests raw 64-bit op handling)
+  local high_bit_values = {
+    { 0x80000000, 0x00000000 }, -- bit 63 set
+    { 0x80000000, 0x00000001 }, -- bit 63 + low bit
+    { 0xFFFFFFFF, 0x00000000 }, -- high word all 1s
+    { 0x00000000, 0x80000000 }, -- bit 31 set
+  }
+  for _, v in ipairs(high_bit_values) do
+    local val = bit64_new(v[1], v[2])
+    local enc = pb.encode_varint(val)
+    local dec = pb.decode_varint64(enc, 1)
+    assert_int64(dec, v[1], v[2], string.format("varint64 {0x%X, 0x%X} roundtrip", v[1], v[2]))
+  end
 
   -- ============================================================================
   -- FIXED32 ENCODING
@@ -811,11 +856,11 @@ function pb.selftest()
   -- ============================================================================
 
   local fixed64_vectors = {
-    { bit64.new(0, 0), "0000000000000000" },
-    { bit64.new(0, 1), "0100000000000000" },
-    { bit64.new(0, 0xFFFFFFFF), "FFFFFFFF00000000" },
-    { bit64.new(1, 0), "0000000001000000" },
-    { bit64.new(0xFFFFFFFF, 0xFFFFFFFF), "FFFFFFFFFFFFFFFF" },
+    { bit64_new(0, 0), "0000000000000000" },
+    { bit64_new(0, 1), "0100000000000000" },
+    { bit64_new(0, 0xFFFFFFFF), "FFFFFFFF00000000" },
+    { bit64_new(1, 0), "0000000001000000" },
+    { bit64_new(0xFFFFFFFF, 0xFFFFFFFF), "FFFFFFFFFFFFFFFF" },
   }
   for _, t in ipairs(fixed64_vectors) do
     assert_bytes(pb.encode_fixed64(t[1]), t[2], string.format("fixed64 encode {0x%X, 0x%X}", t[1][1], t[1][2]))
@@ -872,10 +917,16 @@ function pb.selftest()
     assert_eq(dec, v, "zigzag32 roundtrip " .. v)
   end
 
+  -- Additional zigzag32 edge cases (values that produce high-bit-set results)
+  for _, v in ipairs({ 0x3FFFFFFF, 0x40000000, -0x40000000, -0x40000001 }) do
+    local dec = pb.zigzag_decode32(pb.zigzag_encode32(v))
+    assert_eq(dec, v, string.format("zigzag32 edge case %d roundtrip", v))
+  end
+
   local zigzag64_vectors = {
-    { bit64.new(0, 0), bit64.new(0, 0) },
-    { bit64.new(0xFFFFFFFF, 0xFFFFFFFF), bit64.new(0, 1) },
-    { bit64.new(0, 1), bit64.new(0, 2) },
+    { bit64_new(0, 0), bit64_new(0, 0) },
+    { bit64_new(0xFFFFFFFF, 0xFFFFFFFF), bit64_new(0, 1) },
+    { bit64_new(0, 1), bit64_new(0, 2) },
   }
   for _, t in ipairs(zigzag64_vectors) do
     local enc = pb.zigzag_encode64(t[1])
@@ -883,11 +934,11 @@ function pb.selftest()
   end
 
   local zigzag64_roundtrip = {
-    bit64.new(0, 0),
-    bit64.new(0xFFFFFFFF, 0xFFFFFFFF),
-    bit64.new(0, 1),
-    bit64.new(0xFFFFFFFF, 0xFFFFFFFE),
-    bit64.new(0x7FFFFFFF, 0xFFFFFFFF),
+    bit64_new(0, 0),
+    bit64_new(0xFFFFFFFF, 0xFFFFFFFF),
+    bit64_new(0, 1),
+    bit64_new(0xFFFFFFFF, 0xFFFFFFFE),
+    bit64_new(0x7FFFFFFF, 0xFFFFFFFF),
   }
   for _, v in ipairs(zigzag64_roundtrip) do
     local dec = pb.zigzag_decode64(pb.zigzag_encode64(v))
@@ -913,7 +964,7 @@ function pb.selftest()
 
   local num = 123456789012345
   assert_eq(pb.int64_to_number(pb.int64_from_number(num)), num, "int64 from/to number roundtrip")
-  assert_eq(bit64.is_int64(pb.int64_from_number(num)), true, "int64_from_number returns marked Int64")
+  assert_eq(bit64_is_int64(pb.int64_from_number(num)), true, "int64_from_number returns marked Int64")
 
   assert_eq(pb.int64_equals({ 1, 2 }, { 1, 2 }), true, "int64_equals same")
   assert_eq(pb.int64_equals({ 1, 2 }, { 1, 3 }), false, "int64_equals diff")
@@ -921,14 +972,14 @@ function pb.selftest()
   assert_eq(pb.int64_is_zero({ 0, 1 }), false, "int64_is_zero false")
 
   assert_error(function()
-    pb.int64_to_number(bit64.new(0x00200000, 0), true)
+    pb.int64_to_number(bit64_new(0x00200000, 0), true)
   end, "53%-bit", "int64_to_number strict mode rejects >53-bit")
 
   -- Int64 vs array distinction
-  local int64_val = bit64.new(0, 42)
+  local int64_val = bit64_new(0, 42)
   local array_val = { 1, 2 }
-  assert_eq(bit64.is_int64(int64_val), true, "bit64.is_int64 identifies Int64")
-  assert_eq(bit64.is_int64(array_val), false, "bit64.is_int64 rejects plain array")
+  assert_eq(bit64_is_int64(int64_val), true, "bit64.is_int64 identifies Int64")
+  assert_eq(bit64_is_int64(array_val), false, "bit64.is_int64 rejects plain array")
 
   -- ============================================================================
   -- MESSAGE ENCODE/DECODE: SCALAR TYPES
@@ -950,7 +1001,7 @@ function pb.selftest()
 
   -- Uint64
   local uint64Schema = make_schema("Uint64", "value", Schema.DataType.UINT64, Schema.WireType.VARINT)
-  local u64 = bit64.new(0x00001800, 0x00001000)
+  local u64 = bit64_new(0x00001800, 0x00001000)
   local decU64 = pb.decode(Schema, uint64Schema, pb.encode(Schema, uint64Schema, { value = u64 }))
   assert_int64(decU64.value, u64[1], u64[2], "encode/decode uint64")
 
@@ -963,7 +1014,7 @@ function pb.selftest()
 
   -- Sint64 (zigzag)
   local sint64Schema = make_schema("Sint64", "value", Schema.DataType.SINT64, Schema.WireType.VARINT)
-  for _, t in ipairs({ { bit64.new(0, 0), "0" }, { bit64.new(0, 1), "1" }, { bit64.new(0xFFFFFFFF, 0xFFFFFFFF), "-1" } }) do
+  for _, t in ipairs({ { bit64_new(0, 0), "0" }, { bit64_new(0, 1), "1" }, { bit64_new(0xFFFFFFFF, 0xFFFFFFFF), "-1" } }) do
     local dec = pb.decode(Schema, sint64Schema, pb.encode(Schema, sint64Schema, { value = t[1] }))
     assert_int64(dec.value, t[1][1], t[1][2], "encode/decode sint64 " .. t[2])
   end
@@ -998,7 +1049,7 @@ function pb.selftest()
 
   -- Fixed64
   local fixed64FieldSchema = make_schema("Fixed64", "value", Schema.DataType.FIXED64, Schema.WireType.FIXED64)
-  for _, v in ipairs({ bit64.new(0, 0), bit64.new(0, 1), bit64.new(0xFFFFFFFF, 0xFFFFFFFF) }) do
+  for _, v in ipairs({ bit64_new(0, 0), bit64_new(0, 1), bit64_new(0xFFFFFFFF, 0xFFFFFFFF) }) do
     local dec = pb.decode(Schema, fixed64FieldSchema, pb.encode(Schema, fixed64FieldSchema, { value = v }))
     assert_int64(dec.value, v[1], v[2], string.format("encode/decode fixed64 {0x%X, 0x%X}", v[1], v[2]))
   end
@@ -1008,6 +1059,19 @@ function pb.selftest()
   for _, v in ipairs({ 0, 1, 2, 100 }) do
     local dec = pb.decode(Schema, enumSchema, pb.encode(Schema, enumSchema, { status = v }))
     assert_eq(dec.status, v, "encode/decode enum " .. v)
+  end
+
+  -- Large field numbers (tests raw lshift signed/unsigned handling in key encoding)
+  for _, fn in ipairs({ 536870911, 268435455, 100000 }) do
+    local largeFieldSchema = {
+      name = "LargeField",
+      options = {},
+      fields = {
+        [fn] = { name = "val", type = Schema.DataType.INT32, wireType = Schema.WireType.VARINT },
+      },
+    }
+    local dec = pb.decode(Schema, largeFieldSchema, pb.encode(Schema, largeFieldSchema, { val = 42 }))
+    assert_eq(dec.val, 42, "encode/decode field number " .. fn)
   end
 
   -- ============================================================================
