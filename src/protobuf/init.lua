@@ -29,6 +29,17 @@ local bit64_raw_rshift = bit64.raw_rshift
 local bit64_to_hex = bit64.to_hex
 local bit64_to_number = bit64.to_number
 
+-- Lua 5.3+ removed math.frexp and math.ldexp; provide polyfills
+local math_frexp = math.frexp or function(x)
+  if x == 0 then return 0, 0 end
+  local e = math.floor(math.log(math.abs(x)) / math.log(2)) + 1
+  return x / 2^e, e
+end
+local math_ldexp = math.ldexp or function(m, e)
+  return m * 2^e
+end
+
+
 --- Check if a value is a list (sequential table).
 --- @param t any The value to check.
 --- @return boolean is_list True if the value is a list.
@@ -237,7 +248,7 @@ function pb.encode_float(value)
     value = -value
   end
 
-  local mantissa, exponent = math.frexp(value)
+  local mantissa, exponent = math_frexp(value)
   exponent = exponent - 1
   mantissa = mantissa * 2 - 1
 
@@ -276,7 +287,7 @@ function pb.decode_float(buffer, pos)
     return 0, pos + 4
   end
 
-  local result = math.ldexp(1 + m / 0x800000, e - 127)
+  local result = math_ldexp(1 + m / 0x800000, e - 127)
   if sign == 1 then
     result = -result
   end
@@ -298,7 +309,7 @@ function pb.encode_double(value)
     value = -value
   end
 
-  local mantissa, exponent = math.frexp(value)
+  local mantissa, exponent = math_frexp(value)
   exponent = exponent - 1
   mantissa = mantissa * 2 - 1
 
@@ -346,7 +357,7 @@ function pb.decode_double(buffer, pos)
     return 0, pos + 8
   end
 
-  local result = math.ldexp(1 + m / 0x10000000000000, e - 1023)
+  local result = math_ldexp(1 + m / 0x10000000000000, e - 1023)
   if sign == 1 then
     result = -result
   end
