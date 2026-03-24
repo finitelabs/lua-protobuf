@@ -30,15 +30,17 @@ local bit64_to_hex = bit64.to_hex
 local bit64_to_number = bit64.to_number
 
 -- Lua 5.3+ removed math.frexp and math.ldexp; provide polyfills
-local math_frexp = math.frexp or function(x)
-  if x == 0 then return 0, 0 end
-  local e = math.floor(math.log(math.abs(x)) / math.log(2)) + 1
-  return x / 2^e, e
-end
+local math_frexp = math.frexp
+  or function(x)
+    if x == 0 then
+      return 0, 0
+    end
+    local e = math.floor(math.log(math.abs(x)) / math.log(2)) + 1
+    return x / 2 ^ e, e
+  end
 local math_ldexp = math.ldexp or function(m, e)
-  return m * 2^e
+  return m * 2 ^ e
 end
-
 
 --- Check if a value is a list (sequential table).
 --- @param t any The value to check.
