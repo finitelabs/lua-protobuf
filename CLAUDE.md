@@ -123,8 +123,8 @@ The build process uses `amalg` to create single-file distributions:
 ```bash
 make build
 # Output:
-#   build/protobuf.lua      - Complete bundle with bitn included
-#   build/protobuf-core.lua - Core only, requires external bitn
+#   build/protobuf.lua          - Core (canonical); requires external bitn on the path
+#   build/protobuf-portable.lua - Portable; bitn bundled, zero external deps
 ```
 
 Version is automatically injected from git tags during release.

@@ -22,10 +22,11 @@ implementation that runs on Lua 5.1, 5.2, 5.3, 5.4, and LuaJIT.
 Download a pre-built single-file module from the
 [Releases](https://github.com/finitelabs/lua-protobuf/releases) page:
 
-- **`protobuf.lua`** - Complete bundle with all dependencies included (zero
-  external dependencies)
-- **`protobuf-core.lua`** - Core library only, requires `bitn` to be
-  installed separately
+- **`protobuf.lua`** - the canonical **core** build. Requires `bitn`
+  ([lua-bitn](https://github.com/finitelabs/lua-bitn)) on the Lua path. Use this
+  when composing with libraries that already provide `bitn`.
+- **`protobuf-portable.lua`** - **portable** build with every dependency bundled
+  in (zero external dependencies). Use this for a single drop-in file.
 
 ### Option 2: From Source
 
@@ -171,7 +172,7 @@ make check-types         # Verify types.lua matches empty.proto
 ### Building
 
 ```bash
-make build               # Build single-file distributions (build/protobuf.lua, build/protobuf-core.lua)
+make build               # Build single-file distributions (build/protobuf.lua [core], build/protobuf-portable.lua)
 make clean               # Remove generated files
 ```
 
