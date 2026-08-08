@@ -35,7 +35,7 @@ make format
 # Lint code
 make lint
 
-# Run all quality checks (format, lint, check-types)
+# Run all quality checks (format, lint, check-types, typecheck)
 make check
 
 # Build single-file distributions
@@ -54,18 +54,27 @@ make check-types
 ### typecheck
 
 `make typecheck` runs lua-language-server against the committed
-`.luarc-typecheck.json`, not whatever `.luarc.json` a developer has locally. It
-catches what luacheck does not: undefined or duplicate `@alias`, returns that
-disagree with `@return`, fields missing from a `@class`.
+`.luarc-typecheck.json`. It catches what luacheck does not: undefined or duplicate
+`@alias`, returns that disagree with `@return`, fields missing from a `@class`.
 
-Two settings in that config are load-bearing. `runtime.version` left unset makes
-the server default to Lua 5.4 and check this library as the wrong language,
-reporting a different set of findings rather than fewer. And `vendor/` is both a
-`library` and an `ignoreDir`, so vendored type definitions resolve without
-vendored code being reported here.
+`--configpath` displaces `workspace.*` and `runtime.*` from a local `.luarc.json`
+but *merges* `diagnostics.disable`, so a local disable can still suppress a
+finding and produce a green run that fails `Check`. If a local result disagrees
+with CI, look there first, and compare the server version the target prints:
+`install-deps` takes whatever Homebrew has while CI pins 3.19.0.
 
-Part of `check`, so CI enforces it. Clean under both 3.18.2 and 3.19.0; CI pins
-3.19.0 because the findings do move between versions.
+`vendor/` is both a `library` and an `ignoreDir`, which is load-bearing: with only
+`ignoreDir` the vendored definitions are lost and their uses become
+`undefined-doc-name`, and with only `library` the vendored code is diagnosed here.
+
+`runtime.version` is pinned to LuaJIT because that is what Control4 runs, and
+here it is also load-bearing for the check itself: unset, the server assumes Lua
+5.4 and reports the `math.frexp` and `math.ldexp` polyfill reads in `init.lua` as
+deprecated, which fails the gate. So the pin keeps this repo's own cross-version
+shims from tripping it.
+
+Part of `check`, so CI enforces it. CI pins the server version so the count cannot
+move under an upstream release; 3.18.2 and 3.19.0 agree here.
 
 ## Architecture
 
