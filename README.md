@@ -143,7 +143,7 @@ local hex = protobuf.int64_to_hex({0x12345678, 0x9ABCDEF0})
 ### Setup
 
 ```bash
-# Install all development dependencies (stylua, luacheck, amalg, protoc, Python venv)
+# Install all development dependencies (stylua, luacheck, lua-language-server, amalg, protoc, Python venv)
 make install-deps
 ```
 
@@ -162,11 +162,12 @@ LUA_BINARY=lua5.1 ./run_tests.sh
 ### Code Quality
 
 ```bash
-make check               # Run format check, lint, and check-types
+make check               # Run format check, lint, check-types, and typecheck
 make format              # Format code with stylua
 make format-check        # Check formatting without modifying
 make lint                # Run luacheck
 make check-types         # Verify types.lua matches empty.proto
+make typecheck           # Check annotations with lua-language-server
 ```
 
 ### Building
