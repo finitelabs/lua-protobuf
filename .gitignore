@@ -49,3 +49,6 @@ build/
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Personal language-server config; typecheck pins its own via --configpath
+.luarc.json
