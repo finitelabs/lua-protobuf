@@ -246,7 +246,7 @@ help:
 	@echo "  make check-types                           - Verify types.lua matches empty.proto"
 	@echo ""
 	@echo "Code Quality:"
-	@echo "  make check              - Run format-check, lint, and check-types"
+	@echo "  make check              - Run format-check, lint, check-types, and typecheck"
 	@echo "  make format             - Format code with stylua"
 	@echo "  make format-check       - Check code formatting"
 	@echo "  make lint               - Lint code with luacheck"
