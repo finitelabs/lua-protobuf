@@ -35,14 +35,15 @@ make format
 # Lint code
 make lint
 
-# Run all quality checks (format, lint, check-types, typecheck)
+# Full gate: format-check, lint, check-types, typecheck.
+# Never rewrites files -- format-check fails instead.
 make check
 
 # Build single-file distributions
 make build
 
 # Generate schema from proto files
-make gen-schema PROTO=input.proto OUTPUT=output.lua
+make gen-schema PROTO=input.proto OUTPUT=src/output.lua
 
 # Regenerate base types from empty.proto
 make gen-types
@@ -50,6 +51,10 @@ make gen-types
 # Verify types.lua is up to date
 make check-types
 ```
+
+`make check` is the gate CI runs. `make all` is `format lint test build`, which
+rewrites `src/` in place and runs none of `format-check`, `check-types` or
+`typecheck` — it is not a substitute for `check`.
 
 ### typecheck
 
@@ -125,8 +130,34 @@ move under an upstream release; 3.18.2 and 3.19.0 agree here.
 The library provides Protocol Buffers encoding/decoding with these main functions:
 
 - `protobuf.encode(schema, message_schema, data)` - Encode Lua table to protobuf binary
-- `protobuf.decode(schema, message_schema, data)` - Decode protobuf binary to Lua table
+- `protobuf.decode(schema, message_schema, data)` - Decode protobuf binary to Lua
+  table. Returns **two** values, `message, pos`.
+- `protobuf.version()` - Build-injected version string
 - `protobuf.selftest()` - Run embedded test suite
+
+**Every failure raises.** There is no `nil, err` path anywhere in encode or
+decode; callers must `pcall`.
+
+### What is not implemented
+
+This is the section to read before assuming a `.proto` will round-trip:
+
+- **Packed repeated fields are unsupported in both directions.** Encode emits a
+  tag per element; decode has no packed branch. proto3 packs scalar repeated
+  fields *by default*, so a message produced by `protoc` decodes to a single raw
+  byte-string in the list rather than the values. This is the most likely source
+  of a silent wrong answer.
+- **`oneof`, `map`, field defaults and `required` are not implemented.** Absent
+  fields decode to `nil` with no default applied; nothing enforces `required`.
+- **Unknown fields are skipped, not preserved.** Re-encoding a decoded message
+  drops them.
+- **Groups are unsupported.** `DataType` has no `GROUP` (10) and `WireType` has no
+  SGROUP (3) / EGROUP (4); both raise `"Unknown wire type"`.
+- **The schema generator only walks top-level messages.** `nested_type` is never
+  emitted, and messages are registered under their bare name while fields
+  reference `<package>.<Message>`. Any `.proto` with a `package` declaration or a
+  nested message produces a schema whose subschema lookup misses. `empty.proto`
+  avoids this only by being empty.
 
 ### Schema Structure
 
@@ -145,18 +176,33 @@ local schema = {
 ### Wire Types and Data Types
 
 Defined in `src/protobuf/types.lua`:
-- **WireType**: VARINT (0), FIXED64 (1), LENGTH_DELIMITED (2), FIXED32 (5)
-- **DataType**: All standard protobuf types (DOUBLE, FLOAT, INT32, INT64, STRING, MESSAGE, etc.)
+- **WireType**: VARINT (0), FIXED64 (1), LENGTH_DELIMITED (2), FIXED32 (5).
+  SGROUP (3) and EGROUP (4) are absent.
+- **DataType**: 17 of the 18 standard types. `GROUP` (10) is absent.
 
 ### 64-bit Representation
 
-64-bit values use `{high, low}` pairs for Lua 5.1/LuaJIT compatibility:
+64-bit values use `{high, low}` pairs for Lua 5.1/LuaJIT compatibility, but the
+pair is **not a plain table** — `bit64` attaches a private metatable and
+`is_int64` tests for it:
+
 ```lua
--- 0x123456789ABCDEF0 represented as:
-local value = {0x12345678, 0x9ABCDEF0}
+-- Correct:
+local value = bit64.new(0x12345678, 0x9ABCDEF0)
+local also  = pb.int64_from_number(n)
+
+-- Wrong: a bare literal is classified as a list, and encoding fails with
+-- "Field '...' is not repeated but received a list."
+local bad = {0x12345678, 0x9ABCDEF0}
 ```
 
-Uses `bitn.bit64` for 64-bit operations with `bit64.new(high, low)` constructor.
+This is easy to miss because `int64_to_hex`, `equals` and `is_zero` *do* accept
+plain pairs; only the encode path rejects them.
+
+Decode is asymmetric and this is the thing most often got wrong: INT64, UINT64,
+SINT64, FIXED64 and SFIXED64 come back as Int64 **tables**, while INT32, UINT32,
+ENUM, BOOL and FIXED32 come back as plain numbers. `pb.decode_varint` silently
+truncates beyond 53 bits.
 
 ### Vendor Dependencies
 
@@ -173,15 +219,33 @@ Run with: `./run_tests.sh` or `make test`
 The `tools/gen_lua_proto_schema` Python script converts `.proto` files to Lua schemas:
 
 ```bash
-# Setup (one-time)
+# Setup (one-time; needs python3 and protoc). Creates .venv/
 make setup-schema-generator
 
-# Generate schema
+# Generate schema. OUTPUT must contain a directory component --
+# a bare "schema.lua" raises FileNotFoundError.
 make gen-schema PROTO=api.proto OUTPUT=src/schema.lua
 
-# Supports URLs and multiple files
-make gen-schema PROTO="local.proto https://example.com/remote.proto" OUTPUT=schema.lua
+# Regenerate the base types, then COMMIT the result
+make gen-types
 ```
+
+`src/protobuf/types.lua` is **tracked, not generated at build time** — only
+`build/` and `.venv/` are gitignored. `make check-types` regenerates and diffs,
+failing on stale output, so editing `empty.proto` without committing the
+regenerated `types.lua` breaks CI.
+
+Two traps follow from `check-types` being part of `check`:
+
+- **`make check` fails on a fresh clone** until `make setup-schema-generator` has
+  run, because `check-types` hard-requires `.venv/bin/python3`.
+- **`make clean` removes `.venv/`**, so `make clean && make check` breaks the same
+  way.
+
+Only the *first* `PROTO` file is passed to `protoc`; additional ones are fetched
+and then ignored unless the first imports them. The generator also wraps
+generation in a bare `except` that prints the error and still exits 0, so check
+the output file rather than the exit status.
 
 ## Building
 
@@ -198,16 +262,30 @@ Version is automatically injected from git tags during release.
 
 ## CI/CD
 
-- **build.yml**: Runs on push/PR to main
-  - Format check with stylua
-  - Lint with luacheck
-  - Verify types.lua is up to date
-  - Test matrix (Lua 5.1-5.4, LuaJIT 2.0/2.1)
-  - Build single-file distributions
+- **build.yml**: Runs on push/PR to `main` or `master`
+  - `check` job — `make check`: format-check, luacheck, check-types, and typecheck
+    against lua-language-server 3.19.0
+  - `test` job — `make test-all` across Lua 5.1-5.4, LuaJIT 2.0/2.1
+  - `build` job — single-file distributions
+  - The `luajit-2.1` matrix entry is silently built as **`luajit-openresty`**:
+    rolling LuaJIT HEAD miscompiled the signed arithmetic-shift edge cases in
+    zigzag encoding (arshift of INT_MIN). The job name is kept as `Lua luajit-2.1`
+    so the required status check still matches, so the matrix does not test what
+    its label says.
+- **release.yml**: on version tags (`v*`) — publishes both `build/protobuf.lua`
+  and `build/protobuf-portable.lua`.
+
+`make test-matrix` locally pins `5.1.5 5.2.4 5.3.6 5.4.8 luajit-2.1-dev` and needs
+`luaenv` plus the `luaenv-luarocks` plugin. It does **not** cover LuaJIT 2.0,
+which CI does.
 
 ## Code Style
 
 - 2-space indentation
 - 120 column width
 - Double quotes preferred
+- LuaCATS annotations on public functions
+
+There is no `.stylua.toml`; these live only as CLI flags in the Makefile and cover
+`src/` only.
 - LuaDoc annotations for public functions
