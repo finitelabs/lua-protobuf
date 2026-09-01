@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+// Fixture for `make check-schema`: map fields across key and value type kinds,
+// including one declared inside a nested message. Each map makes protoc
+// synthesize an `*Entry` message that the field's `subschema` names, so this
+// fixture fails the check unless those entries are registered too.
+package fixture.maps;
+
+enum Flag {
+  FLAG_UNSET = 0;
+  FLAG_SET = 1;
+}
+
+message Payload {
+  string id = 1;
+}
+
+message Holder {
+  message Inner {
+    map<string, Payload> nested_payloads = 1;
+  }
+
+  map<string, int32> counts = 1;
+  map<int32, string> names = 2;
+  map<string, Payload> payloads = 3;
+  map<string, Flag> flags = 4;
+  map<int64, uint64> totals = 5;
+  Inner inner = 6;
+}

@@ -14,7 +14,8 @@ lua-protobuf/
 │   ├── check_schema_refs.lua # Asserts a generated schema resolves its subschemas
 │   └── requirements.txt      # Python dependencies for schema generator
 ├── test/
-│   └── nested.proto  # Fixture: nested types, packages, services (check-schema)
+│   ├── nested.proto  # Fixture: nested types, packages, services (check-schema)
+│   └── maps.proto    # Fixture: map fields and their synthesized entries (check-schema)
 ├── .github/workflows/
 │   └── build.yml     # CI: check, test matrix, build
 ├── empty.proto       # Empty proto for generating base types
@@ -153,16 +154,13 @@ This is the section to read before assuming a `.proto` will round-trip:
   fields *by default*, so a message produced by `protoc` decodes to a single raw
   byte-string in the list rather than the values. This is the most likely source
   of a silent wrong answer.
-- **`oneof`, `map`, field defaults and `required` are not implemented.** Absent
-  fields decode to `nil` with no default applied; nothing enforces `required`.
+- **`oneof`, field defaults and `required` are not implemented.** Absent fields
+  decode to `nil` with no default applied; nothing enforces `required`. Map
+  entries are the one exception, covered under Map Fields below.
 - **Unknown fields are skipped, not preserved.** Re-encoding a decoded message
   drops them.
 - **Groups are unsupported.** `DataType` has no `GROUP` (10) and `WireType` has no
   SGROUP (3) / EGROUP (4); both raise `"Unknown wire type"`.
-- **Map fields generate a dangling `subschema`.** `map` is unimplemented (above),
-  and the synthesized `<Field>Entry` message protoc nests for each map field is
-  deliberately not emitted, so the field's `subschema` names a message that was
-  never registered. `make check-schema` reports it as a dangling reference.
 
 ### Schema Structure
 
@@ -189,6 +187,30 @@ bare name, which is why `api.proto`-derived schemas are unaffected by the rule.
 
 The LuaDoc `@class` names stay short (`ProtoBindingRecord`): a class name cannot
 contain dots, and `@field` annotations are emitted from the same short form.
+
+### Map Fields
+
+A `map<K, V>` field carries `map = true` **instead of** `repeated = true`, and its
+`subschema` names the `<Field>Entry` message protoc synthesizes. Those entries are
+registered in `Message` like any other type, because that is genuinely what a map
+is on the wire: repeated length-delimited entries with the key at field 1 and the
+value at field 2.
+
+In Lua the field is a table keyed by the protobuf key, **not** a list of entries:
+
+```lua
+{ counts = { alpha = 1, beta = 2 } }   -- not { { key = "alpha", value = 1 }, ... }
+```
+
+Two consequences worth knowing:
+
+- **`repeated` is absent on a map field**, so anything branching on `repeated` to
+  decide list-ness reads a map as a singular field. Branch on `map` first.
+- **A map entry applies key and value defaults**, unlike every other field, which
+  decodes absent as `nil`. A producer may drop either side of an entry when it
+  holds the zero value, and a missing key would otherwise index the destination
+  table with `nil` and raise. `map<int64, …>` keys arrive as Int64 **tables**, per
+  the decode asymmetry below, which makes them useless for lookup by value.
 
 ### Wire Types and Data Types
 

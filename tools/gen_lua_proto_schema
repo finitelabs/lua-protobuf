@@ -90,9 +90,38 @@ def get_type(field_type: int) -> str:
     return TYPE_MAP.get(field_type, "ProtoSchema.WIRE.UNKNOWN")
 
 
-def get_lua_type(field: FieldDescriptorProto) -> str:
+def map_entry_for(
+        field: FieldDescriptorProto,
+        map_entries: dict[str, DescriptorProto] | None,
+) -> DescriptorProto | None:
+    """Return the entry descriptor `field` is a map over, or None if it is not a map."""
+    if not map_entries or field.type != FieldDescriptorProto.TYPE_MESSAGE:
+        return None
+    return map_entries.get(field.type_name.strip("."))
+
+
+def entry_field(entry: DescriptorProto, number: int) -> FieldDescriptorProto:
+    """Return a map entry's field by number: protoc numbers the key 1 and the value 2."""
+    for field in entry.field:
+        if field.number == number:
+            return field
+    raise ValueError(f"map entry {entry.name} has no field numbered {number}")
+
+
+def get_lua_type(
+        field: FieldDescriptorProto,
+        map_entries: dict[str, DescriptorProto] | None = None,
+) -> str:
     """Get the Lua type annotation for a protobuf field."""
     base_types = LUA_TYPE_MAP.get(field.type, "any")
+
+    entry = map_entry_for(field, map_entries)
+    if entry is not None:
+        key_type = get_lua_type(entry_field(entry, 1))
+        value_type = get_lua_type(entry_field(entry, 2), map_entries)
+        if "|" in value_type:
+            value_type = f"({value_type})"
+        return f"table<{key_type}, {value_type}>"
 
     # Handle message types - use the actual message type name
     if field.type == FieldDescriptorProto.TYPE_MESSAGE:
@@ -136,15 +165,13 @@ def iter_messages(
     Yield `message` and every message nested inside it, depth first, each paired
     with its fully-qualified name.
 
-    Map fields make protoc synthesize a nested `*Entry` message per field; those
-    are an encoding detail of the parent field rather than a type a caller can
-    reference, so they are skipped.
+    The synthesized `*Entry` protoc nests per map field is included: it is the
+    message a map's repeated entries are encoded as, so the field's `subschema`
+    only resolves if it is registered alongside the rest.
     """
     full_name = qualify(prefix, message.name)
     found = [(full_name, message)]
     for nested in message.nested_type:
-        if nested.options.map_entry:
-            continue
         found.extend(iter_messages(nested, full_name))
     return found
 
@@ -154,19 +181,32 @@ def iter_enums(message: DescriptorProto, prefix: str = "") -> list[tuple[str, ob
     full_name = qualify(prefix, message.name)
     found = [(qualify(full_name, enum.name), enum) for enum in message.enum_type]
     for nested in message.nested_type:
-        if nested.options.map_entry:
-            continue
         found.extend(iter_enums(nested, full_name))
     return found
 
 
-def generate_message_class_annotation(message: DescriptorProto, indent: int = 0) -> str:
+def collect_map_entries(fds: FileDescriptorSet) -> dict[str, DescriptorProto]:
+    """Map every synthesized map-entry message's fully-qualified name to its descriptor."""
+    entries = {}
+    for proto_file in fds.file:
+        for message in proto_file.message_type:
+            for full_name, nested in iter_messages(message, proto_file.package):
+                if nested.options.map_entry:
+                    entries[full_name] = nested
+    return entries
+
+
+def generate_message_class_annotation(
+        message: DescriptorProto,
+        indent: int = 0,
+        map_entries: dict[str, DescriptorProto] | None = None,
+) -> str:
     """Generate LuaDoc class and field annotations for a message type."""
     prefix = "  " * indent
     lua = f"{prefix}--- @class Proto{message.name}\n"
 
     for field in message.field:
-        lua_type = get_lua_type(field)
+        lua_type = get_lua_type(field, map_entries)
         # All fields are optional in protobuf3, so mark with ?
         if "|" in lua_type:
             lua_type = f"({lua_type})"
@@ -175,7 +215,11 @@ def generate_message_class_annotation(message: DescriptorProto, indent: int = 0)
     return lua
 
 
-def parse_field(field: FieldDescriptorProto, indent: int = 0) -> str:
+def parse_field(
+        field: FieldDescriptorProto,
+        indent: int = 0,
+        map_entries: dict[str, DescriptorProto] | None = None,
+) -> str:
     """Parse a field descriptor and return as a Lua table entry."""
     lua = ("  " * indent) + f"[{field.number}] = {{\n"
     lua += ("  " * (indent + 1)) + f'name = "{field.name}",\n'
@@ -184,7 +228,10 @@ def parse_field(field: FieldDescriptorProto, indent: int = 0) -> str:
     if field.type == FieldDescriptorProto.TYPE_ENUM:
         lua += f" -- {field.type_name.strip('.')}"
     lua += "\n"
-    if field.label == FieldDescriptorProto.LABEL_REPEATED:
+    # protoc labels a map field LABEL_REPEATED, but in Lua it is a keyed table.
+    if map_entry_for(field, map_entries) is not None:
+        lua += ("  " * (indent + 1)) + f"map = true,\n"
+    elif field.label == FieldDescriptorProto.LABEL_REPEATED:
         lua += ("  " * (indent + 1)) + f"repeated = true,\n"
     if field.type == FieldDescriptorProto.TYPE_MESSAGE:
         # Store message type name as string - decoder will look it up at runtime
@@ -233,6 +280,7 @@ def parse_message(
         message_option_extensions: dict[int, str] | None = None,
         indent: int = 0,
         full_name: str | None = None,
+        map_entries: dict[str, DescriptorProto] | None = None,
 ) -> str:
     """Parse a message descriptor into a Lua table."""
     full_name = full_name if full_name is not None else message.name
@@ -277,7 +325,7 @@ def parse_message(
         if not new_line_added:
             lua += "\n"
             new_line_added = True
-        lua += parse_field(field, indent=indent + 2)
+        lua += parse_field(field, indent=indent + 2, map_entries=map_entries)
     if new_line_added:
         lua += ("  " * (indent + 1)) + "},\n"
     else:
@@ -350,6 +398,7 @@ def extract_message_option_extensions(fds: FileDescriptorSet) -> dict[int, str]:
 def parse_descriptor_set(fds: FileDescriptorSet) -> str:
     """Parse file descriptor set into a Lua schema."""
     message_option_extensions = extract_message_option_extensions(fds)
+    map_entries = collect_map_entries(fds)
 
     lua = ""
 
@@ -361,7 +410,9 @@ def parse_descriptor_set(fds: FileDescriptorSet) -> str:
             if message.name == "void":
                 continue
             for _, nested in iter_messages(message):
-                lua += generate_message_class_annotation(nested, indent=0)
+                lua += generate_message_class_annotation(
+                    nested, indent=0, map_entries=map_entries
+                )
                 lua += "\n"
 
     enums = []
@@ -402,6 +453,7 @@ def parse_descriptor_set(fds: FileDescriptorSet) -> str:
                     message_option_extensions=message_option_extensions,
                     indent=0,
                     full_name=full_name,
+                    map_entries=map_entries,
                 )
     if any_content_added:
         lua += "\n"
@@ -536,6 +588,7 @@ def main():
                     --- @field wireType ProtoWireType The protobuf wire type (see ProtoSchema.WireType).
                     --- @field type ProtoDataType The protobuf type (see ProtoSchema.DataType).
                     --- @field repeated boolean? Whether the field is repeated (optional).
+                    --- @field map boolean? Whether the field is a map, encoded as repeated `subschema` entries (optional).
                     --- @field subschema string? The subschema name for nested messages (optional).
                     
                     --- @class ProtoMessageSchema
