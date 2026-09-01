@@ -507,6 +507,17 @@ function pb.encode(protoSchema, messageSchema, message)
             -- For nested messages
             local nested_message = pb.encode(protoSchema, protoSchema.Message[field.subschema], value)
             buffer = buffer .. pb.encode_length_delimited(nested_message)
+          else
+            -- The tag is already written; without this a non-string/table value
+            -- would emit a bare tag with no length or payload, silently truncating
+            -- the stream instead of failing like the varint/fixed paths do.
+            error(
+              "Field '"
+                .. field.name
+                .. "' is length-delimited (string, bytes, or message) but received a "
+                .. type(value)
+                .. "."
+            )
           end
         else
           error("Unsupported wire type: " .. tostring(field.wireType))
@@ -1040,6 +1051,12 @@ function pb.selftest()
     local dec = pb.decode(Schema, stringSchema, pb.encode(Schema, stringSchema, { text = v }))
     assert_eq(dec.text, v, "encode/decode string len=" .. #v)
   end
+
+  -- A non-string/table value on a length-delimited field must raise, not emit a
+  -- bare tag with no payload (which would silently truncate the stream).
+  assert_error(function()
+    pb.encode(Schema, stringSchema, { text = 42 })
+  end, "length%-delimited", "error: number on a length-delimited field")
 
   -- Float
   local floatSchema = make_schema("Float", "value", Schema.DataType.FLOAT, Schema.WireType.FIXED32)
