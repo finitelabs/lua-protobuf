@@ -114,6 +114,52 @@ def get_lua_type(field: FieldDescriptorProto) -> str:
     return "|".join(base_types)
 
 
+def qualify(prefix: str, name: str) -> str:
+    """Join a package/parent-message prefix with a type name."""
+    return f"{prefix}.{name}" if prefix else name
+
+
+def lua_table_key(table: str, name: str) -> str:
+    """
+    Render an accessor for `name` in `table`.
+
+    Fully-qualified names contain dots, which Lua would read as further table
+    indexing, so those have to go through bracket syntax.
+    """
+    return f'{table}["{name}"]' if "." in name else f"{table}.{name}"
+
+
+def iter_messages(
+        message: DescriptorProto, prefix: str = ""
+) -> list[tuple[str, DescriptorProto]]:
+    """
+    Yield `message` and every message nested inside it, depth first, each paired
+    with its fully-qualified name.
+
+    Map fields make protoc synthesize a nested `*Entry` message per field; those
+    are an encoding detail of the parent field rather than a type a caller can
+    reference, so they are skipped.
+    """
+    full_name = qualify(prefix, message.name)
+    found = [(full_name, message)]
+    for nested in message.nested_type:
+        if nested.options.map_entry:
+            continue
+        found.extend(iter_messages(nested, full_name))
+    return found
+
+
+def iter_enums(message: DescriptorProto, prefix: str = "") -> list[tuple[str, object]]:
+    """Yield every enum declared inside `message` or its nested messages."""
+    full_name = qualify(prefix, message.name)
+    found = [(qualify(full_name, enum.name), enum) for enum in message.enum_type]
+    for nested in message.nested_type:
+        if nested.options.map_entry:
+            continue
+        found.extend(iter_enums(nested, full_name))
+    return found
+
+
 def generate_message_class_annotation(message: DescriptorProto, indent: int = 0) -> str:
     """Generate LuaDoc class and field annotations for a message type."""
     prefix = "  " * indent
@@ -186,11 +232,13 @@ def parse_message(
         message: DescriptorProto,
         message_option_extensions: dict[int, str] | None = None,
         indent: int = 0,
+        full_name: str | None = None,
 ) -> str:
     """Parse a message descriptor into a Lua table."""
+    full_name = full_name if full_name is not None else message.name
     lua = ("  " * indent) + f"--- @type ProtoMessageSchema\n"
-    lua += ("  " * indent) + f"ProtoSchema.Message.{message.name} = {{\n"
-    lua += ("  " * (indent + 1)) + f'name = "{message.name}",\n'
+    lua += ("  " * indent) + lua_table_key("ProtoSchema.Message", full_name) + " = {\n"
+    lua += ("  " * (indent + 1)) + f'name = "{full_name}",\n'
 
     # Build options table
     lua += ("  " * (indent + 1)) + "options = {"
@@ -238,10 +286,11 @@ def parse_message(
     return lua + ("  " * indent) + "}\n\n"
 
 
-def parse_enum(enum, indent: int = 0) -> str:
+def parse_enum(enum, indent: int = 0, full_name: str | None = None) -> str:
     """Parse an enum descriptor into a Lua table."""
+    full_name = full_name if full_name is not None else enum.name
     lua = ("  " * indent) + f"--- @enum Proto{enum.name}\n"
-    lua += ("  " * indent) + f"ProtoSchema.Enum.{enum.name} = {{"
+    lua += ("  " * indent) + lua_table_key("ProtoSchema.Enum", full_name) + " = {"
     new_line_added = False
     for value in enum.value:
         if not new_line_added:
@@ -262,12 +311,10 @@ def parse_service_method(
     lua = ("  " * indent) + f"{method.name} = {{\n"
     lua += ("  " * (indent + 1)) + f'service = "{service.name}",\n'
     lua += ("  " * (indent + 1)) + f'method = "{method.name}",\n'
-    lua += (
-                   "  " * (indent + 1)
-           ) + f"inputType = ProtoSchema.Message{method.input_type},\n"
-    lua += (
-                   "  " * (indent + 1)
-           ) + f"outputType = ProtoSchema.Message{method.output_type},\n"
+    input_type = lua_table_key("ProtoSchema.Message", method.input_type.strip("."))
+    output_type = lua_table_key("ProtoSchema.Message", method.output_type.strip("."))
+    lua += ("  " * (indent + 1)) + f"inputType = {input_type},\n"
+    lua += ("  " * (indent + 1)) + f"outputType = {output_type},\n"
     lua += ("  " * indent) + "},\n"
     return lua
 
@@ -313,8 +360,9 @@ def parse_descriptor_set(fds: FileDescriptorSet) -> str:
         for message in proto_file.message_type:
             if message.name == "void":
                 continue
-            lua += generate_message_class_annotation(message, indent=0)
-            lua += "\n"
+            for _, nested in iter_messages(message):
+                lua += generate_message_class_annotation(nested, indent=0)
+                lua += "\n"
 
     enums = []
     any_content_added = False
@@ -322,13 +370,19 @@ def parse_descriptor_set(fds: FileDescriptorSet) -> str:
         if proto_file.package == "google.protobuf":
             continue
         comment_added = False
-        for message in proto_file.enum_type:
+        file_enums = [
+            (qualify(proto_file.package, enum.name), enum)
+            for enum in proto_file.enum_type
+        ]
+        for message in proto_file.message_type:
+            file_enums.extend(iter_enums(message, proto_file.package))
+        for full_name, enum in file_enums:
             any_content_added = True
             if not comment_added and proto_file.package:
                 lua += f"-- Package: {proto_file.package}\n"
                 comment_added = True
-            lua += parse_enum(message, indent=0)
-            enums.append(f"Proto{message.name}")
+            lua += parse_enum(enum, indent=0, full_name=full_name)
+            enums.append(f"Proto{enum.name}")
     if any_content_added:
         lua += "\n"
 
@@ -338,13 +392,17 @@ def parse_descriptor_set(fds: FileDescriptorSet) -> str:
             continue
         comment_added = False
         for message in proto_file.message_type:
-            any_content_added = True
-            if not comment_added and proto_file.package:
-                lua += f"-- Package: {proto_file.package}\n"
-                comment_added = True
-            lua += parse_message(
-                message, message_option_extensions=message_option_extensions, indent=0
-            )
+            for full_name, nested in iter_messages(message, proto_file.package):
+                any_content_added = True
+                if not comment_added and proto_file.package:
+                    lua += f"-- Package: {proto_file.package}\n"
+                    comment_added = True
+                lua += parse_message(
+                    nested,
+                    message_option_extensions=message_option_extensions,
+                    indent=0,
+                    full_name=full_name,
+                )
     if any_content_added:
         lua += "\n"
 

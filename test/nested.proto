@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+// Fixture for `make check-schema`: a package, nesting past one level, a nested
+// enum, a cross-message reference to a nested type, and a service. `empty.proto`
+// reaches none of these by being empty.
+package fixture.nested;
+
+enum TopLevelStatus {
+  TOP_UNKNOWN = 0;
+  TOP_OK = 1;
+}
+
+message Outer {
+  message Inner {
+    message Deep {
+      string value = 1;
+    }
+    enum InnerStatus {
+      INNER_UNSET = 0;
+      INNER_SET = 1;
+    }
+    Deep deep = 1;
+    InnerStatus status = 2;
+  }
+
+  Inner inner = 1;
+  repeated Inner inners = 2;
+  TopLevelStatus status = 3;
+  Sibling sibling = 4;
+}
+
+message Sibling {
+  Outer.Inner.Deep deep = 1;
+}
+
+service Fixture {
+  rpc Roundtrip (Outer) returns (Sibling);
+}

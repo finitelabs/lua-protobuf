@@ -11,7 +11,10 @@ lua-protobuf/
 │   └── bitn.lua      # Vendored bitwise operations library
 ├── tools/
 │   ├── gen_lua_proto_schema  # Python script to generate Lua schemas from .proto
+│   ├── check_schema_refs.lua # Asserts a generated schema resolves its subschemas
 │   └── requirements.txt      # Python dependencies for schema generator
+├── test/
+│   └── nested.proto  # Fixture: nested types, packages, services (check-schema)
 ├── .github/workflows/
 │   └── build.yml     # CI: check, test matrix, build
 ├── empty.proto       # Empty proto for generating base types
@@ -35,7 +38,7 @@ make format
 # Lint code
 make lint
 
-# Full gate: format-check, lint, check-types, typecheck.
+# Full gate: format-check, lint, check-types, check-schema, typecheck.
 # Never rewrites files -- format-check fails instead.
 make check
 
@@ -50,11 +53,14 @@ make gen-types
 
 # Verify types.lua is up to date
 make check-types
+
+# Verify generated schemas resolve every subschema they reference
+make check-schema
 ```
 
 `make check` is the gate CI runs. `make all` is `format lint test build`, which
-rewrites `src/` in place and runs none of `format-check`, `check-types` or
-`typecheck` — it is not a substitute for `check`.
+rewrites `src/` in place and runs none of `format-check`, `check-types`,
+`check-schema` or `typecheck` — it is not a substitute for `check`.
 
 ### typecheck
 
@@ -153,11 +159,10 @@ This is the section to read before assuming a `.proto` will round-trip:
   drops them.
 - **Groups are unsupported.** `DataType` has no `GROUP` (10) and `WireType` has no
   SGROUP (3) / EGROUP (4); both raise `"Unknown wire type"`.
-- **The schema generator only walks top-level messages.** `nested_type` is never
-  emitted, and messages are registered under their bare name while fields
-  reference `<package>.<Message>`. Any `.proto` with a `package` declaration or a
-  nested message produces a schema whose subschema lookup misses. `empty.proto`
-  avoids this only by being empty.
+- **Map fields generate a dangling `subschema`.** `map` is unimplemented (above),
+  and the synthesized `<Field>Entry` message protoc nests for each map field is
+  deliberately not emitted, so the field's `subschema` names a message that was
+  never registered. `make check-schema` reports it as a dangling reference.
 
 ### Schema Structure
 
@@ -172,6 +177,18 @@ local schema = {
   DataType = {},  -- Data type constants
 }
 ```
+
+`Message` and `Enum` are keyed by **fully-qualified** protobuf name, meaning package
+and enclosing messages included, dot separated. That is the form `type_name` already
+gives a field's `subschema`, and `decode` resolves a subschema by indexing `Message`
+with it directly. So `test/nested.proto`'s doubly-nested `Deep` registers as
+`Message["fixture.nested.Outer.Inner.Deep"]`, not `Message.Deep`.
+
+For a `.proto` with no `package` and no nested types the qualified name equals the
+bare name, which is why `api.proto`-derived schemas are unaffected by the rule.
+
+The LuaDoc `@class` names stay short (`ProtoBindingRecord`): a class name cannot
+contain dots, and `@field` annotations are emitted from the same short form.
 
 ### Wire Types and Data Types
 
@@ -263,8 +280,8 @@ Version is automatically injected from git tags during release.
 ## CI/CD
 
 - **build.yml**: Runs on push/PR to `main` or `master`
-  - `check` job — `make check`: format-check, luacheck, check-types, and typecheck
-    against lua-language-server 3.19.0
+  - `check` job — `make check`: format-check, luacheck, check-types, check-schema,
+    and typecheck against lua-language-server 3.19.0
   - `test` job — `make test-all` across Lua 5.1-5.4, LuaJIT 2.0/2.1
   - `build` job — single-file distributions
   - The `luajit-2.1` matrix entry is silently built as **`luajit-openresty`**:
