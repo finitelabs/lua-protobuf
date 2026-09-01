@@ -1479,6 +1479,21 @@ function pb.selftest()
     pb.encode(Schema, countsSchema, { counts = 42 })
   end, "non%-table", "error: non-table for map field")
 
+  local bytesSchema = make_schema("Bytes", "data", Schema.DataType.BYTES, Schema.WireType.LENGTH_DELIMITED)
+  assert_error(function()
+    pb.encode(Schema, bytesSchema, { data = true })
+  end, "length%-delimited", "error: boolean for bytes field")
+
+  assert_error(function()
+    pb.encode(Schema, outerSchema, { inner = 42 })
+  end, "length%-delimited", "error: number for message field")
+
+  local repeatedStringSchema =
+    make_schema("RepeatedString", "tags", Schema.DataType.STRING, Schema.WireType.LENGTH_DELIMITED, { repeated = true })
+  assert_error(function()
+    pb.encode(Schema, repeatedStringSchema, { tags = { "ok", 42 } })
+  end, "length%-delimited", "error: number element in repeated string field")
+
   -- ============================================================================
   -- SUMMARY
   -- ============================================================================
