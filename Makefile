@@ -4,6 +4,9 @@ LUAROCKS_PATH := $(shell luarocks path --lr-path 2>/dev/null)
 # Lua path for local modules (src, vendor)
 LUA_PATH_LOCAL := ./?.lua;./?/init.lua;./src/?.lua;./src/?/init.lua;./vendor/?.lua;$(LUAROCKS_PATH)
 
+# Interpreter for standalone tool scripts; run_tests.sh honours the same variable
+LUA_BINARY ?= lua
+
 # Default target
 .PHONY: all
 all: format lint test build
@@ -162,6 +165,20 @@ check-types:
 		exit 1; \
 	fi
 
+# Generate the nested fixture schema and assert its subschema references resolve
+.PHONY: check-schema
+check-schema:
+	@if [ ! -f .venv/bin/python3 ]; then \
+		echo "Python virtual environment not found. Run 'make setup-schema-generator' first."; \
+		exit 1; \
+	fi
+	@echo "Checking generated schemas resolve their subschema references..."
+	@mkdir -p build
+	@.venv/bin/python3 tools/gen_lua_proto_schema build/nested.schema.lua test/nested.proto
+	@$(LUA_BINARY) tools/check_schema_refs.lua build/nested.schema.lua
+	@.venv/bin/python3 tools/gen_lua_proto_schema build/empty.schema.lua empty.proto
+	@$(LUA_BINARY) tools/check_schema_refs.lua build/empty.schema.lua
+
 # Format Lua code with stylua
 .PHONY: format
 format:
@@ -217,7 +234,7 @@ typecheck:
 	fi
 
 .PHONY: check
-check: format-check lint check-types typecheck
+check: format-check lint check-types check-schema typecheck
 	@echo "Code quality checks complete."
 
 # Clean generated files
@@ -244,9 +261,10 @@ help:
 	@echo "  make gen-schema PROTO=<file> OUTPUT=<file> - Generate Lua schema from proto file(s)"
 	@echo "  make gen-types                             - Regenerate src/protobuf/types.lua"
 	@echo "  make check-types                           - Verify types.lua matches empty.proto"
+	@echo "  make check-schema                          - Verify generated schemas resolve subschemas"
 	@echo ""
 	@echo "Code Quality:"
-	@echo "  make check              - Run format-check, lint, check-types, and typecheck"
+	@echo "  make check              - Run format-check, lint, check-types, check-schema, and typecheck"
 	@echo "  make format             - Format code with stylua"
 	@echo "  make format-check       - Check code formatting"
 	@echo "  make lint               - Lint code with luacheck"
