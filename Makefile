@@ -165,7 +165,7 @@ check-types:
 		exit 1; \
 	fi
 
-# Generate the nested fixture schema and assert its subschema references resolve
+# Generate each fixture schema and assert its subschema references resolve
 .PHONY: check-schema
 check-schema:
 	@if [ ! -f .venv/bin/python3 ]; then \
@@ -176,6 +176,8 @@ check-schema:
 	@mkdir -p build
 	@.venv/bin/python3 tools/gen_lua_proto_schema build/nested.schema.lua test/nested.proto
 	@$(LUA_BINARY) tools/check_schema_refs.lua build/nested.schema.lua
+	@.venv/bin/python3 tools/gen_lua_proto_schema build/maps.schema.lua test/maps.proto
+	@$(LUA_BINARY) tools/check_schema_refs.lua build/maps.schema.lua
 	@.venv/bin/python3 tools/gen_lua_proto_schema build/empty.schema.lua empty.proto
 	@$(LUA_BINARY) tools/check_schema_refs.lua build/empty.schema.lua
 
