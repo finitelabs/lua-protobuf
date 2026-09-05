@@ -149,11 +149,10 @@ decode; callers must `pcall`.
 
 This is the section to read before assuming a `.proto` will round-trip:
 
-- **Packed repeated fields are unsupported in both directions.** Encode emits a
-  tag per element; decode has no packed branch. proto3 packs scalar repeated
-  fields *by default*, so a message produced by `protoc` decodes to a single raw
-  byte-string in the list rather than the values. This is the most likely source
-  of a silent wrong answer.
+- **The encoder never packs.** It emits one tag per element even for a proto3
+  scalar `repeated` field, which `protoc` would pack. The bytes are valid and any
+  conformant parser reads them, but they will not match a reference capture.
+  Decode accepts both spellings; see Packed Repeated Fields below.
 - **`oneof`, field defaults and `required` are not implemented.** Absent fields
   decode to `nil` with no default applied; nothing enforces `required`. Map
   entries are the one exception, covered under Map Fields below.
@@ -211,6 +210,33 @@ Two consequences worth knowing:
   holds the zero value, and a missing key would otherwise index the destination
   table with `nil` and raise. `map<int64, …>` keys arrive as Int64 **tables**, per
   the decode asymmetry below, which makes them useless for lookup by value.
+
+### Packed Repeated Fields
+
+proto3 packs scalar `repeated` fields *by default*: a single length-delimited
+block holds the elements concatenated, with no per-element tags. Packing applies
+to scalars only, so a `repeated` message field is length-delimited per element
+and is never packed.
+
+Decode accepts every spelling a producer may emit, and appends rather than
+replaces, because one field may legally arrive as several blocks or mix the two
+forms:
+
+- packed, as one block
+- unpacked, as one tag per element
+- split across several blocks, or packed and unpacked in the same message
+
+A packed element and an unpacked one read through the same type dispatch in
+`decode_scalar`, so zigzag, bool, Int64, float and double cannot drift apart
+between the two paths.
+
+Encode emits only the unpacked spelling. Re-encoding a decoded message therefore
+does not reproduce the original bytes when the producer packed them, which is
+worth knowing before diffing encoder output against a capture.
+
+Before v0.6.7 decode had no packed branch and read the whole block as one
+LENGTH_DELIMITED value, so a `protoc`-produced message decoded to a single raw
+byte-string in the list rather than the values.
 
 ### Wire Types and Data Types
 
