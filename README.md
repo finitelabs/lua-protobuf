@@ -110,12 +110,17 @@ print(decoded.name)  -- "example"
 | sint32, sint64 | varint | ZigZag encoded |
 | fixed32, sfixed32 | 32-bit | Little-endian |
 | fixed64, sfixed64 | 64-bit | Little-endian |
-| float | 32-bit | IEEE 754 |
-| double | 64-bit | IEEE 754 |
+| float | 32-bit | IEEE 754, except subnormals (see below) |
+| double | 64-bit | IEEE 754, except subnormals (see below) |
 | bool | varint | |
 | string, bytes | length-delimited | |
 | enum | varint | |
 | message | length-delimited | Nested messages |
+
+NaN, both infinities and negative zero round-trip. Subnormals do not: decoding
+one applies the implicit leading 1 and reads too large (the smallest float
+subnormal, `01000000`, decodes as `5.88e-39` rather than `1.40e-45`), and
+encoding one flushes to zero.
 
 ### 64-bit Value Representation
 

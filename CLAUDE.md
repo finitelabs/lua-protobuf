@@ -160,6 +160,15 @@ This is the section to read before assuming a `.proto` will round-trip:
   drops them.
 - **Groups are unsupported.** `DataType` has no `GROUP` (10) and `WireType` has no
   SGROUP (3) / EGROUP (4); both raise `"Unknown wire type"`.
+- **Subnormal floats and doubles are wrong in both directions.** Decode applies
+  the implicit leading 1 unconditionally, so `01000000` reads as `5.88e-39`
+  instead of `1.40e-45`; encode clamps the exponent to 0 with a zero mantissa, so
+  any subnormal flushes to zero. NaN, the infinities and negative zero are
+  handled. Tracked as FL-16.
+- **The `frexp` fallback is not exact.** `math_frexp` falls back to a `math.log`
+  computation when `math.frexp` is absent, and that fallback can return a
+  mantissa of exactly 1.0, which encodes some normal doubles a factor of two too
+  small. Every CI target has a native `math.frexp`, so nothing exercises it.
 
 ### Schema Structure
 
