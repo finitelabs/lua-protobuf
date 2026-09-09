@@ -11,7 +11,7 @@
 # Every module runs twice, once with the interpreter's native math.frexp and
 # math.ldexp and once with them cleared so the module's own fallbacks are bound.
 #
-# Available modules: protobuf, float-vectors
+# Available modules: protobuf, math-fallback
 
 set -e  # Exit on any error
 
@@ -49,8 +49,8 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 lua_path="$script_dir/?.lua;$script_dir/?/init.lua;$script_dir/src/?.lua;$script_dir/src/?/init.lua;$script_dir/vendor/?.lua;$LUA_PATH"
 
 # Parse command line arguments to determine which modules to run
-default_modules=("protobuf" "float-vectors")
-all_modules=("protobuf" "float-vectors")
+default_modules=("protobuf" "math-fallback")
+all_modules=("protobuf" "math-fallback")
 modules_to_run=("$@")
 
 # Validate modules if specified
@@ -106,17 +106,22 @@ math_preamble() {
     fi
 }
 
-# Function to run a test and capture result
+# Function to run a test and capture result. A fourth argument restricts the
+# module to a single math mode.
 run_test() {
     local module_name="$1"
     local module_key="$2"
     local lua_command="$3"
+    local only_mode="${4:-}"
 
     if ! should_run_module "$module_key"; then
         return
     fi
 
     for math_mode in "${math_modes[@]}"; do
+        if [ -n "$only_mode" ] && [ "$math_mode" != "$only_mode" ]; then
+            continue
+        fi
         local labelled="$module_name (math $math_mode)"
 
         echo "---------------------------------------------"
@@ -149,10 +154,12 @@ run_selftest() {
 
 run_selftest "Protobuf operations" "protobuf" "protobuf"
 
-export PB_TEST_DIR="$script_dir/test"
-run_test "Float codec vectors" "float-vectors" "
-    dofile('$script_dir/test/float_vectors_test.lua')
-"
+# Native only: this module clears the globals and re-requires the module itself
+# to reach the fallbacks, and it needs the native functions surviving as the
+# oracle to compare them against.
+run_test "Math fallbacks" "math-fallback" "
+    dofile('$script_dir/test/math_fallback_test.lua')
+" "native"
 
 passed_count=${#passed_modules[@]}
 failed_count=${#failed_modules[@]}

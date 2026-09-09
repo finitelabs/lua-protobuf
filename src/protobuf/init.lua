@@ -61,9 +61,22 @@ local math_frexp = math.frexp
     end
     return m, e
   end
-local math_ldexp = math.ldexp or function(m, e)
-  return m * 2 ^ e
-end
+local math_ldexp = math.ldexp
+  or function(m, e)
+    -- Same constraint as the frexp fallback above: 2 ^ e is only exact while it
+    -- is itself a normal double, and LuaJIT 2.0 returns zero at the subnormal
+    -- end. Step the scale in normal-range chunks so a representable result is
+    -- never reached through an intermediate infinity or zero.
+    while e > 1000 do
+      m = m * 2 ^ 1000
+      e = e - 1000
+    end
+    while e < -1000 do
+      m = m * 2 ^ -1000
+      e = e + 1000
+    end
+    return m * 2 ^ e
+  end
 
 local NAN = 0 / 0
 local INF = math.huge
@@ -1811,5 +1824,11 @@ function pb.selftest()
   print(string.format("\nProtobuf operations: %d/%d tests passed\n", passed, passed + failed))
   return failed == 0
 end
+
+-- Whichever frexp/ldexp the module bound at load. Exposed so the fallbacks can
+-- be compared against a native implementation directly; the codecs only reach
+-- them over the argument range the wire format produces, which is narrower than
+-- the range the fallbacks have to be correct over.
+pb._math = { frexp = math_frexp, ldexp = math_ldexp }
 
 return pb

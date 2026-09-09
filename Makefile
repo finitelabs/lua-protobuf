@@ -165,38 +165,6 @@ check-types:
 		exit 1; \
 	fi
 
-# Regenerate the float codec vector table from the struct oracle
-.PHONY: gen-float-vectors
-gen-float-vectors:
-	@if [ ! -f .venv/bin/python3 ]; then \
-		echo "Python virtual environment not found. Run 'make setup-schema-generator' first."; \
-		exit 1; \
-	fi
-	@.venv/bin/python3 tools/gen_float_vectors test/float_vectors.lua
-
-# Check that test/float_vectors.lua matches what the oracle would generate (for CI)
-.PHONY: check-float-vectors
-check-float-vectors:
-	@if [ ! -f .venv/bin/python3 ]; then \
-		echo "Python virtual environment not found. Run 'make setup-schema-generator' first."; \
-		exit 1; \
-	fi
-	@echo "Checking test/float_vectors.lua is up to date..."
-	@mkdir -p build
-	@.venv/bin/python3 tools/gen_float_vectors build/float_vectors.lua.tmp
-	@if diff -q test/float_vectors.lua build/float_vectors.lua.tmp >/dev/null 2>&1; then \
-		echo "test/float_vectors.lua is up to date"; \
-		rm -f build/float_vectors.lua.tmp; \
-	else \
-		echo "ERROR: test/float_vectors.lua is out of date!"; \
-		echo "Run 'make gen-float-vectors' to regenerate it."; \
-		echo ""; \
-		echo "Diff:"; \
-		diff test/float_vectors.lua build/float_vectors.lua.tmp | head -40 || true; \
-		rm -f build/float_vectors.lua.tmp; \
-		exit 1; \
-	fi
-
 # Generate each fixture schema and assert its subschema references resolve
 .PHONY: check-schema
 check-schema:
@@ -268,7 +236,7 @@ typecheck:
 	fi
 
 .PHONY: check
-check: format-check lint check-types check-float-vectors check-schema typecheck
+check: format-check lint check-types check-schema typecheck
 	@echo "Code quality checks complete."
 
 # Clean generated files
