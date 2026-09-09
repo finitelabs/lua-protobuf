@@ -42,6 +42,12 @@ local math_ldexp = math.ldexp or function(m, e)
   return m * 2 ^ e
 end
 
+local NAN = 0 / 0
+local INF = math.huge
+-- Lua 5.1 constant-folds the literal -0.0 to +0.0, and LuaJIT does the same to
+-- 0.0 * -1. Dividing into an infinity is the one form that survives everywhere.
+local NEG_ZERO = -1 / INF
+
 --- Check if a value is a list (sequential table).
 --- @param t any The value to check.
 --- @return boolean is_list True if the value is a list.
@@ -240,7 +246,22 @@ end
 --- @param value number The floating-point number to encode.
 --- @return string bytes The encoded 4-byte sequence.
 function pb.encode_float(value)
+  -- The frexp path below cannot represent these: it reads a non-finite as a
+  -- mantissa of 1 and an exponent of 0, so every one of them encoded as 0.5.
+  -- Emitted as the canonical patterns any conformant parser produces.
+  if value ~= value then
+    return string.char(0x00, 0x00, 0xC0, 0x7F)
+  elseif value == INF then
+    return string.char(0x00, 0x00, 0x80, 0x7F)
+  elseif value == -INF then
+    return string.char(0x00, 0x00, 0x80, 0xFF)
+  end
+
   if value == 0 then
+    -- -0.0 == 0, so the sign is only observable through the reciprocal.
+    if 1 / value < 0 then
+      return string.char(0x00, 0x00, 0x00, 0x80)
+    end
     return string.char(0, 0, 0, 0)
   end
 
@@ -258,12 +279,20 @@ function pb.encode_float(value)
   if e < 0 then
     e = 0
     mantissa = 0
-  elseif e > 255 then
+  elseif e >= 255 then
+    -- 255 is the all-ones exponent, so it has to be reached by clamping too:
+    -- leaving it to a finite input would emit a nonzero mantissa, i.e. a NaN.
     e = 255
     mantissa = 0
   end
 
   local m = math.floor(mantissa * 0x800000 + 0.5)
+  -- Rounding to nearest can carry out of the mantissa. Bit 23 of m would land on
+  -- the exponent's low bit below, which absorbs the carry when that bit is set.
+  if m >= 0x800000 then
+    m = 0
+    e = e + 1
+  end
 
   local b1 = m % 256
   local b2 = math.floor(m / 256) % 256
@@ -286,7 +315,17 @@ function pb.decode_float(buffer, pos)
   local m = bit32_raw_band(b3, 0x7F) * 65536 + b2 * 256 + b1
 
   if e == 0 and m == 0 then
-    return 0, pos + 4
+    return sign == 1 and NEG_ZERO or 0, pos + 4
+  end
+
+  -- IEEE 754 reserves an all-ones exponent for the non-finite values: infinity
+  -- when the mantissa is zero, NaN otherwise. Without this the mantissa term is
+  -- scaled by 2^128 and a NaN comes back as a plausible finite reading.
+  if e == 255 then
+    if m == 0 then
+      return sign == 1 and -INF or INF, pos + 4
+    end
+    return NAN, pos + 4
   end
 
   local result = math_ldexp(1 + m / 0x800000, e - 127)
@@ -301,7 +340,19 @@ end
 --- @param value number The double-precision floating-point number to encode.
 --- @return string bytes The encoded 8-byte sequence.
 function pb.encode_double(value)
+  -- Non-finite, as in encode_float.
+  if value ~= value then
+    return string.char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF8, 0x7F)
+  elseif value == INF then
+    return string.char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x7F)
+  elseif value == -INF then
+    return string.char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0xFF)
+  end
+
   if value == 0 then
+    if 1 / value < 0 then
+      return string.char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80)
+    end
     return string.char(0, 0, 0, 0, 0, 0, 0, 0)
   end
 
@@ -356,7 +407,16 @@ function pb.decode_double(buffer, pos)
   local m = m_high * 0x100000000 + m_low
 
   if e == 0 and m == 0 then
-    return 0, pos + 8
+    return sign == 1 and NEG_ZERO or 0, pos + 8
+  end
+
+  -- Non-finite, as in decode_float. Here the 2^1024 scale overflows to infinity
+  -- instead, so an unhandled NaN was indistinguishable from a real infinity.
+  if e == 2047 then
+    if m == 0 then
+      return sign == 1 and -INF or INF, pos + 8
+    end
+    return NAN, pos + 8
   end
 
   local result = math_ldexp(1 + m / 0x10000000000000, e - 1023)
@@ -832,11 +892,19 @@ function pb.selftest()
     end
   end
 
-  local function assert_bytes(actual, expected_hex, msg)
-    local expected = ""
-    for byte in expected_hex:gmatch("%x%x") do
-      expected = expected .. string.char(tonumber(byte, 16) or 0)
+  local function from_hex(hex)
+    local bytes = ""
+    for byte in hex:gmatch("%x%x") do
+      bytes = bytes .. string.char(tonumber(byte, 16) or 0)
     end
+    -- gmatch skips anything that is not a hex pair, so a typo silently yields a
+    -- short buffer, which the decoders then read past the end of.
+    assert(#bytes * 2 == #hex, "malformed hex literal: " .. hex)
+    return bytes
+  end
+
+  local function assert_bytes(actual, expected_hex, msg)
+    local expected = from_hex(expected_hex)
     if actual == expected then
       passed = passed + 1
       print("  PASS: " .. msg)
@@ -853,6 +921,16 @@ function pb.selftest()
     else
       failed = failed + 1
       print("  FAIL: " .. msg .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
+    end
+  end
+
+  local function assert_nan(actual, msg)
+    if type(actual) == "number" and actual ~= actual then
+      passed = passed + 1
+      print("  PASS: " .. msg)
+    else
+      failed = failed + 1
+      print("  FAIL: " .. msg .. ": expected NaN, got " .. tostring(actual))
     end
   end
 
@@ -1033,6 +1111,44 @@ function pb.selftest()
     assert_close(dec, v, 1e-4, "float roundtrip " .. v)
   end
 
+  assert_bytes(pb.encode_float(NAN), "0000C07F", "float encode NaN")
+  assert_bytes(pb.encode_float(math.huge), "0000807F", "float encode +infinity")
+  assert_bytes(pb.encode_float(-math.huge), "000080FF", "float encode -infinity")
+
+  -- Decoded from the canonical wire patterns rather than from this encoder's own
+  -- output, so the assertions still hold if both sides break together. The
+  -- signalling and non-canonical mantissas are the ones a real producer varies.
+  assert_nan(pb.decode_float(from_hex("0000C07F"), 1), "float decode quiet NaN")
+  assert_nan(pb.decode_float(from_hex("0100807F"), 1), "float decode signalling NaN")
+  assert_nan(pb.decode_float(from_hex("FFFFFFFF"), 1), "float decode negative NaN")
+  assert_eq(pb.decode_float(from_hex("0000807F"), 1), math.huge, "float decode +infinity")
+  assert_eq(pb.decode_float(from_hex("000080FF"), 1), -math.huge, "float decode -infinity")
+
+  -- The largest finite float still decodes finite: the guard keys on the
+  -- all-ones exponent, not on magnitude.
+  assert_close(pb.decode_float(from_hex("FFFF7F7F"), 1), 3.4028234663853e38, 1e30, "float decode max finite")
+
+  -- A finite double too large for a float saturates to infinity. Expectations
+  -- come from a C (float) cast, not from this encoder.
+  assert_bytes(pb.encode_float(3.5e38), "0000807F", "float encode just over max to +infinity")
+  assert_bytes(pb.encode_float(-3.5e38), "000080FF", "float encode just under min to -infinity")
+  assert_bytes(pb.encode_float(1e39), "0000807F", "float encode far over max to +infinity")
+  -- Below the midpoint to 2^128 it rounds down to the largest finite float
+  -- instead, so the saturation above is not simply "big magnitude wins".
+  assert_bytes(pb.encode_float(3.40282349e38), "FFFF7F7F", "float encode under midpoint to max finite")
+
+  -- Mantissa rounding that carries into the exponent. The odd-exponent cases are
+  -- the ones where the carry bit collides with the exponent's low bit.
+  assert_bytes(pb.encode_float(2 - 2 ^ -25), "00000040", "float encode carry into odd exponent")
+  assert_bytes(pb.encode_float(32 * (1 - 2 ^ -25)), "00000042", "float encode carry into odd exponent, larger")
+  assert_bytes(pb.encode_float(4 - 2 ^ -24), "00008040", "float encode carry into even exponent")
+
+  assert_bytes(pb.encode_float(NEG_ZERO), "00000080", "float encode negative zero")
+  assert_bytes(pb.encode_float(0), "00000000", "float encode positive zero")
+  local neg_zero_f = pb.decode_float(from_hex("00000080"), 1)
+  assert_eq(1 / neg_zero_f, -INF, "float decode negative zero")
+  assert_eq(1 / pb.decode_float(from_hex("00000000"), 1), INF, "float decode positive zero")
+
   -- ============================================================================
   -- DOUBLE ENCODING
   -- ============================================================================
@@ -1044,6 +1160,20 @@ function pb.selftest()
     local dec = pb.decode_double(pb.encode_double(v), 1)
     assert_close(dec, v, 1e-10, "double roundtrip " .. v)
   end
+
+  assert_bytes(pb.encode_double(NAN), "000000000000F87F", "double encode NaN")
+  assert_bytes(pb.encode_double(math.huge), "000000000000F07F", "double encode +infinity")
+  assert_bytes(pb.encode_double(-math.huge), "000000000000F0FF", "double encode -infinity")
+
+  assert_nan(pb.decode_double(from_hex("000000000000F87F"), 1), "double decode quiet NaN")
+  assert_nan(pb.decode_double(from_hex("010000000000F07F"), 1), "double decode signalling NaN")
+  assert_nan(pb.decode_double(from_hex("FFFFFFFFFFFFFFFF"), 1), "double decode negative NaN")
+  assert_eq(pb.decode_double(from_hex("000000000000F07F"), 1), math.huge, "double decode +infinity")
+  assert_eq(pb.decode_double(from_hex("000000000000F0FF"), 1), -math.huge, "double decode -infinity")
+
+  assert_bytes(pb.encode_double(NEG_ZERO), "0000000000000080", "double encode negative zero")
+  assert_eq(1 / pb.decode_double(from_hex("0000000000000080"), 1), -INF, "double decode negative zero")
+  assert_eq(1 / pb.decode_double(from_hex("0000000000000000"), 1), INF, "double decode positive zero")
 
   -- ============================================================================
   -- ZIGZAG ENCODING (official protobuf spec test vectors)
@@ -1198,6 +1328,29 @@ function pb.selftest()
     local dec = pb.decode(Schema, doubleSchema, pb.encode(Schema, doubleSchema, { value = v }))
     assert_close(dec.value, v, 1e-10, "encode/decode double " .. v)
   end
+
+  -- The reported failure came through the FIXED32/FLOAT and FIXED64/DOUBLE
+  -- branches of encode_scalar and decode_scalar, not through the codecs alone,
+  -- so a wrong-width or wrong-branch regression there would leave the direct
+  -- codec assertions above green.
+  assert_nan(
+    pb.decode(Schema, floatSchema, pb.encode(Schema, floatSchema, { value = NAN })).value,
+    "encode/decode float NaN"
+  )
+  assert_nan(
+    pb.decode(Schema, doubleSchema, pb.encode(Schema, doubleSchema, { value = NAN })).value,
+    "encode/decode double NaN"
+  )
+  assert_eq(
+    pb.decode(Schema, floatSchema, pb.encode(Schema, floatSchema, { value = INF })).value,
+    INF,
+    "encode/decode float +infinity"
+  )
+  assert_eq(
+    pb.decode(Schema, doubleSchema, pb.encode(Schema, doubleSchema, { value = -INF })).value,
+    -INF,
+    "encode/decode double -infinity"
+  )
 
   -- Fixed32
   local fixed32FieldSchema = make_schema("Fixed32", "value", Schema.DataType.FIXED32, Schema.WireType.FIXED32)
