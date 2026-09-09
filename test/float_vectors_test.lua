@@ -104,7 +104,17 @@ for i = 1, #vectors do
   end
 end
 
-print(string.format("Float codec vectors: %d, math.frexp %s", #vectors, math.frexp and "native" or "fallback"))
+-- Recorded rather than asserted. The fallback's scaling is only exact while the
+-- power of two it forms is a normal double, and interpreters disagree at the
+-- subnormal end: LuaJIT 2.0 returns 0 for 2 ^ -1024 where the others return the
+-- exact value. This line is what identifies that from a CI log.
+print(string.format(
+  "Float codec vectors: %d, math.frexp %s, 2 ^ -1024 = %.17g, 2 ^ -1000 = %.17g",
+  #vectors,
+  math.frexp and "native" or "fallback",
+  2 ^ -1024,
+  2 ^ -1000
+))
 
 local failed = false
 

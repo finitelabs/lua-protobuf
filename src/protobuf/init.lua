@@ -36,11 +36,14 @@ local math_frexp = math.frexp
       return x, 0
     end
     local e = math.floor(math.log(math.abs(x)) / math.log(2)) + 1
-    -- Scaling by an exact power of two is itself exact, but 2 ^ -e is infinity
-    -- once e drops to -1024, which a subnormal x reaches. Split the scale below
-    -- a conservative threshold so it never forms that infinity.
+    -- Scaling by a power of two is exact, but only while that power is itself a
+    -- normal double. 2 ^ -e is infinity by e = -1024 and subnormal by e = 1023,
+    -- and LuaJIT 2.0 returns zero for the subnormal end rather than the exact
+    -- value. Split the scale so neither factor ever leaves the normal range.
     local m
-    if e < -1000 then
+    if e > 1000 then
+      m = x * 2 ^ -1000 * 2 ^ (1000 - e)
+    elseif e < -1000 then
       m = x * 2 ^ 1000 * 2 ^ (-e - 1000)
     else
       m = x * 2 ^ -e
