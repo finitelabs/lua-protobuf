@@ -42,6 +42,8 @@ local math_ldexp = math.ldexp or function(m, e)
   return m * 2 ^ e
 end
 
+local NAN = 0 / 0
+
 --- Check if a value is a list (sequential table).
 --- @param t any The value to check.
 --- @return boolean is_list True if the value is a list.
@@ -289,6 +291,16 @@ function pb.decode_float(buffer, pos)
     return 0, pos + 4
   end
 
+  -- IEEE 754 reserves an all-ones exponent for the non-finite values: infinity
+  -- when the mantissa is zero, NaN otherwise. Without this the mantissa term is
+  -- scaled by 2^128 and a NaN comes back as a plausible finite reading.
+  if e == 255 then
+    if m == 0 then
+      return sign == 1 and -math.huge or math.huge, pos + 4
+    end
+    return NAN, pos + 4
+  end
+
   local result = math_ldexp(1 + m / 0x800000, e - 127)
   if sign == 1 then
     result = -result
@@ -357,6 +369,15 @@ function pb.decode_double(buffer, pos)
 
   if e == 0 and m == 0 then
     return 0, pos + 8
+  end
+
+  -- Non-finite, as in decode_float. Here the 2^1024 scale overflows to infinity
+  -- instead, so an unhandled NaN was indistinguishable from a real infinity.
+  if e == 2047 then
+    if m == 0 then
+      return sign == 1 and -math.huge or math.huge, pos + 8
+    end
+    return NAN, pos + 8
   end
 
   local result = math_ldexp(1 + m / 0x10000000000000, e - 1023)
@@ -832,11 +853,16 @@ function pb.selftest()
     end
   end
 
-  local function assert_bytes(actual, expected_hex, msg)
-    local expected = ""
-    for byte in expected_hex:gmatch("%x%x") do
-      expected = expected .. string.char(tonumber(byte, 16) or 0)
+  local function from_hex(hex)
+    local bytes = ""
+    for byte in hex:gmatch("%x%x") do
+      bytes = bytes .. string.char(tonumber(byte, 16) or 0)
     end
+    return bytes
+  end
+
+  local function assert_bytes(actual, expected_hex, msg)
+    local expected = from_hex(expected_hex)
     if actual == expected then
       passed = passed + 1
       print("  PASS: " .. msg)
@@ -853,6 +879,16 @@ function pb.selftest()
     else
       failed = failed + 1
       print("  FAIL: " .. msg .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
+    end
+  end
+
+  local function assert_nan(actual, msg)
+    if type(actual) == "number" and actual ~= actual then
+      passed = passed + 1
+      print("  PASS: " .. msg)
+    else
+      failed = failed + 1
+      print("  FAIL: " .. msg .. ": expected NaN, got " .. tostring(actual))
     end
   end
 
@@ -1033,6 +1069,19 @@ function pb.selftest()
     assert_close(dec, v, 1e-4, "float roundtrip " .. v)
   end
 
+  -- Decoded from the canonical wire patterns rather than from this encoder's own
+  -- output, so the assertions still hold if both sides break together. The
+  -- signalling and non-canonical mantissas are the ones a real producer varies.
+  assert_nan(pb.decode_float(from_hex("0000C07F"), 1), "float decode quiet NaN")
+  assert_nan(pb.decode_float(from_hex("0100807F"), 1), "float decode signalling NaN")
+  assert_nan(pb.decode_float(from_hex("FFFFFFFF"), 1), "float decode negative NaN")
+  assert_eq(pb.decode_float(from_hex("0000807F"), 1), math.huge, "float decode +infinity")
+  assert_eq(pb.decode_float(from_hex("000080FF"), 1), -math.huge, "float decode -infinity")
+
+  -- The largest finite float still decodes finite: the guard keys on the
+  -- all-ones exponent, not on magnitude.
+  assert_close(pb.decode_float(from_hex("FFFF7F7F"), 1), 3.4028234663853e38, 1e30, "float decode max finite")
+
   -- ============================================================================
   -- DOUBLE ENCODING
   -- ============================================================================
@@ -1044,6 +1093,12 @@ function pb.selftest()
     local dec = pb.decode_double(pb.encode_double(v), 1)
     assert_close(dec, v, 1e-10, "double roundtrip " .. v)
   end
+
+  assert_nan(pb.decode_double(from_hex("000000000000F87F"), 1), "double decode quiet NaN")
+  assert_nan(pb.decode_double(from_hex("010000000000F07F"), 1), "double decode signalling NaN")
+  assert_nan(pb.decode_double(from_hex("FFFFFFFFFFFFFFFF"), 1), "double decode negative NaN")
+  assert_eq(pb.decode_double(from_hex("000000000000F07F"), 1), math.huge, "double decode +infinity")
+  assert_eq(pb.decode_double(from_hex("000000000000F0FF"), 1), -math.huge, "double decode -infinity")
 
   -- ============================================================================
   -- ZIGZAG ENCODING (official protobuf spec test vectors)
