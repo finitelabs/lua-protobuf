@@ -242,6 +242,17 @@ end
 --- @param value number The floating-point number to encode.
 --- @return string bytes The encoded 4-byte sequence.
 function pb.encode_float(value)
+  -- The frexp path below cannot represent these: it reads a non-finite as a
+  -- mantissa of 1 and an exponent of 0, so every one of them encoded as 0.5.
+  -- Emitted as the canonical patterns any conformant parser produces.
+  if value ~= value then
+    return string.char(0x00, 0x00, 0xC0, 0x7F)
+  elseif value == math.huge then
+    return string.char(0x00, 0x00, 0x80, 0x7F)
+  elseif value == -math.huge then
+    return string.char(0x00, 0x00, 0x80, 0xFF)
+  end
+
   if value == 0 then
     return string.char(0, 0, 0, 0)
   end
@@ -313,6 +324,15 @@ end
 --- @param value number The double-precision floating-point number to encode.
 --- @return string bytes The encoded 8-byte sequence.
 function pb.encode_double(value)
+  -- Non-finite, as in encode_float.
+  if value ~= value then
+    return string.char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF8, 0x7F)
+  elseif value == math.huge then
+    return string.char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x7F)
+  elseif value == -math.huge then
+    return string.char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0xFF)
+  end
+
   if value == 0 then
     return string.char(0, 0, 0, 0, 0, 0, 0, 0)
   end
@@ -1069,6 +1089,10 @@ function pb.selftest()
     assert_close(dec, v, 1e-4, "float roundtrip " .. v)
   end
 
+  assert_bytes(pb.encode_float(NAN), "0000C07F", "float encode NaN")
+  assert_bytes(pb.encode_float(math.huge), "0000807F", "float encode +infinity")
+  assert_bytes(pb.encode_float(-math.huge), "000080FF", "float encode -infinity")
+
   -- Decoded from the canonical wire patterns rather than from this encoder's own
   -- output, so the assertions still hold if both sides break together. The
   -- signalling and non-canonical mantissas are the ones a real producer varies.
@@ -1093,6 +1117,10 @@ function pb.selftest()
     local dec = pb.decode_double(pb.encode_double(v), 1)
     assert_close(dec, v, 1e-10, "double roundtrip " .. v)
   end
+
+  assert_bytes(pb.encode_double(NAN), "000000000000F87F", "double encode NaN")
+  assert_bytes(pb.encode_double(math.huge), "000000000000F07F", "double encode +infinity")
+  assert_bytes(pb.encode_double(-math.huge), "000000000000F0FF", "double encode -infinity")
 
   assert_nan(pb.decode_double(from_hex("000000000000F87F"), 1), "double decode quiet NaN")
   assert_nan(pb.decode_double(from_hex("010000000000F07F"), 1), "double decode signalling NaN")
