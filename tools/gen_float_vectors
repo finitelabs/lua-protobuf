@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Generate the float and double codec vector table from Python's struct module.
+
+struct is the oracle: it packs through the platform's IEEE 754 hardware, so the
+expectations here are never hand-computed. Each vector carries both encode
+expectations and the float32-rounded value the decode side must reproduce.
+
+Usage: gen_float_vectors <output.lua>
+"""
+
+import math
+import random
+import struct
+import sys
+
+SEED = 20260909
+
+
+def f64_bits(v):
+    return struct.unpack("<Q", struct.pack("<d", v))[0]
+
+
+def f32_hex(v):
+    return struct.pack("<f", v).hex().upper()
+
+
+def f32_value(v):
+    return struct.unpack("<f", struct.pack("<f", v))[0]
+
+
+def f64_hex(v):
+    return struct.pack("<d", v).hex().upper()
+
+
+def is_f32_tie(v):
+    """True when v sits exactly halfway between two adjacent float32 neighbours.
+
+    A property of the value, not a claim about the codec: it is where
+    round-half-to-even and round-half-away-from-zero are free to disagree.
+    """
+    if not f32_representable(v) or v == 0:
+        return False
+    b = struct.unpack("<I", struct.pack("<f", v))[0]
+    for lo_bits in (b - 1, b):
+        try:
+            lo = struct.unpack("<f", struct.pack("<I", lo_bits))[0]
+            hi = struct.unpack("<f", struct.pack("<I", lo_bits + 1))[0]
+        except (struct.error, OverflowError):
+            continue
+        if lo < v < hi and v == (lo + hi) / 2:
+            return True
+    return False
+
+
+def f32_representable(v):
+    try:
+        struct.pack("<f", v)
+    except OverflowError:
+        return False
+    return True
+
+
+def literal(v):
+    # Lua 5.1 constant-folds the literal -0.0 to +0.0 and LuaJIT does the same to
+    # 0.0 * -1, so a negative zero has to reach the table through a name bound to
+    # a form that survives every interpreter.
+    if v == 0.0 and math.copysign(1.0, v) < 0:
+        return "NEG_ZERO"
+    r = repr(v)
+    if float(r) != v:
+        raise SystemExit("literal does not round-trip: %r" % v)
+    return r
+
+
+def main():
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: gen_float_vectors <output.lua>")
+
+    rnd = random.Random(SEED)
+    seen = set()
+    vectors = []
+
+    def add(v, group):
+        if v != v or v in (float("inf"), float("-inf")):
+            return
+        key = f64_bits(v)
+        if key in seen:
+            return
+        seen.add(key)
+        vectors.append((v, group))
+
+    # Powers of two across the whole double range. This group is what exposes an
+    # inexact frexp: the log-based fallback lands on the wrong side of the
+    # integer exponent only for values whose true mantissa is exactly 0.5.
+    for k in range(-1074, 1024):
+        add(float.fromhex("0x1p%d" % k), "pow2")
+        add(-float.fromhex("0x1p%d" % k), "pow2")
+
+    # The top binade. 2^1024 is not representable, so any fallback that divides
+    # by a single 2^e collapses every value here onto 2^1023.
+    for i in range(0, 64):
+        add(float.fromhex("0x1p1023") * (1 + i / 64.0), "top_binade")
+    add(sys.float_info.max, "top_binade")
+
+    # Just under each power of two, where round-to-nearest carries out of the
+    # mantissa and into the exponent.
+    for k in range(-149, 129):
+        add(float.fromhex("0x1p%d" % k) * (1 - 2**-25), "binade_top")
+
+    # Float subnormals: both ends, the implicit-bit boundary, and a sample.
+    for m in [1, 2, 3, 0x400000, 0x7FFFFE, 0x7FFFFF, 0x800000, 0x800001]:
+        add(struct.unpack("<f", struct.pack("<I", m))[0], "f32_subnormal")
+    for _ in range(64):
+        m = rnd.randrange(1, 0x800000)
+        add(struct.unpack("<f", struct.pack("<I", m))[0], "f32_subnormal")
+
+    # Double subnormals, same shape.
+    for m in [1, 2, 3, 1 << 26, (1 << 52) - 2, (1 << 52) - 1, 1 << 52, (1 << 52) + 1]:
+        add(struct.unpack("<d", struct.pack("<Q", m))[0], "f64_subnormal")
+    for _ in range(64):
+        m = rnd.randrange(1, 1 << 52)
+        add(struct.unpack("<d", struct.pack("<Q", m))[0], "f64_subnormal")
+
+    # Exact midpoints between adjacent float32 neighbours, where half-to-even and
+    # half-away-from-zero disagree.
+    for _ in range(256):
+        e = rnd.randint(-125, 127)
+        m = rnd.getrandbits(23)
+        lo = struct.unpack("<f", struct.pack("<I", ((e + 127) << 23) | m))[0]
+        hi = struct.unpack("<f", struct.pack("<I", (((e + 127) << 23) | m) + 1))[0]
+        add((lo + hi) / 2, "f32_tie")
+
+    # Unstructured coverage, fixed seed so a failure is reproducible.
+    for _ in range(512):
+        v = struct.unpack("<d", struct.pack("<Q", rnd.getrandbits(64)))[0]
+        add(v, "random")
+    for _ in range(256):
+        v = struct.unpack("<f", struct.pack("<I", rnd.getrandbits(32)))[0]
+        add(v, "random")
+
+    lines = []
+    for v, group in vectors:
+        ok32 = f32_representable(v)
+        lines.append(
+            '  { %s, %s, %s, "%s", "%s", %s },'
+            % (
+                literal(v),
+                ('"%s"' % f32_hex(v)) if ok32 else "false",
+                literal(f32_value(v)) if ok32 else "false",
+                f64_hex(v),
+                group,
+                "true" if is_f32_tie(v) else "false",
+            )
+        )
+
+    with open(sys.argv[1], "w") as fh:
+        fh.write("-- Generated by tools/gen_float_vectors. Do not edit by hand.\n")
+        fh.write("--\n")
+        fh.write("-- Fields: value, float32 hex, float32-rounded value, double hex,\n")
+        fh.write("-- generator group, and whether the value is an exact float32 midpoint.\n")
+        fh.write("-- The two float32 fields are false when the value is outside the\n")
+        fh.write("-- float32 range.\n")
+        fh.write("--\n")
+        fh.write("-- Regenerate with 'make gen-float-vectors'; 'make check-float-vectors'\n")
+        fh.write("-- fails if the checked-in table has drifted from the oracle.\n")
+        fh.write("local NEG_ZERO = -1 / math.huge\n\n")
+        fh.write("return {\n")
+        fh.write("\n".join(lines))
+        fh.write("\n}\n")
+
+    print("wrote %d vectors to %s" % (len(vectors), sys.argv[1]))
+
+
+if __name__ == "__main__":
+    main()

@@ -32,11 +32,31 @@ local bit64_to_number = bit64.to_number
 -- Lua 5.3+ removed math.frexp and math.ldexp; provide polyfills
 local math_frexp = math.frexp
   or function(x)
-    if x == 0 then
-      return 0, 0
+    if x == 0 or x ~= x or x == math.huge or x == -math.huge then
+      return x, 0
     end
     local e = math.floor(math.log(math.abs(x)) / math.log(2)) + 1
-    return x / 2 ^ e, e
+    -- Scaling by an exact power of two is itself exact, but 2 ^ -e is infinity
+    -- once e drops to -1024, which a subnormal x reaches. Split the scale below
+    -- a conservative threshold so it never forms that infinity.
+    local m
+    if e < -1000 then
+      m = x * 2 ^ 1000 * 2 ^ (-e - 1000)
+    else
+      m = x * 2 ^ -e
+    end
+    -- The log quotient lands on the wrong side of an integer for some inputs,
+    -- which puts m outside [0.5, 1). Left uncorrected it reaches exactly 1.0 and
+    -- overflows the mantissa field downstream.
+    while m ~= 0 and (m >= 1 or m <= -1) do
+      m = m / 2
+      e = e + 1
+    end
+    while m ~= 0 and m > -0.5 and m < 0.5 do
+      m = m * 2
+      e = e - 1
+    end
+    return m, e
   end
 local math_ldexp = math.ldexp or function(m, e)
   return m * 2 ^ e

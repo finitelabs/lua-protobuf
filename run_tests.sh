@@ -8,7 +8,10 @@
 #   ./run_tests.sh                    # Run all modules
 #   ./run_tests.sh protobuf           # Run only protobuf
 #
-# Available modules: protobuf
+# Every module runs twice, once with the interpreter's native math.frexp and
+# math.ldexp and once with them cleared so the module's own fallbacks are bound.
+#
+# Available modules: protobuf, float-vectors
 
 set -e  # Exit on any error
 
@@ -46,8 +49,8 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 lua_path="$script_dir/?.lua;$script_dir/?/init.lua;$script_dir/src/?.lua;$script_dir/src/?/init.lua;$script_dir/vendor/?.lua;$LUA_PATH"
 
 # Parse command line arguments to determine which modules to run
-default_modules=("protobuf")
-all_modules=("protobuf")
+default_modules=("protobuf" "float-vectors")
+all_modules=("protobuf" "float-vectors")
 modules_to_run=("$@")
 
 # Validate modules if specified
@@ -90,6 +93,19 @@ should_run_module() {
     return 1
 }
 
+# math.frexp and math.ldexp are absent on a 5.3 or 5.4 built without
+# LUA_COMPAT_5_3, so the module falls back to its own implementations. Every
+# interpreter in the matrix supplies them natively, which left the fallback
+# unreached by any test. Clearing the globals before require() binds the
+# fallbacks instead, so each module runs once down each path.
+math_modes=("native" "fallback")
+
+math_preamble() {
+    if [ "$1" = "fallback" ]; then
+        echo "math.frexp = nil; math.ldexp = nil;"
+    fi
+}
+
 # Function to run a test and capture result
 run_test() {
     local module_name="$1"
@@ -100,19 +116,23 @@ run_test() {
         return
     fi
 
-    echo "---------------------------------------------"
-    echo -e "${blue}Testing $module_name...${nc}"
-    echo "---------------------------------------------"
+    for math_mode in "${math_modes[@]}"; do
+        local labelled="$module_name (math $math_mode)"
 
-    if LUA_PATH="$lua_path" "$lua_binary" -e "$lua_command" 2>&1; then
-        echo -e "${green}✅ $module_name: ALL TESTS PASSED${nc}"
-        passed_modules+=("$module_name")
-    else
-        echo -e "${red}❌ $module_name: TESTS FAILED${nc}"
-        failed_modules+=("$module_name")
-    fi
+        echo "---------------------------------------------"
+        echo -e "${blue}Testing $labelled...${nc}"
+        echo "---------------------------------------------"
 
-    echo
+        if LUA_PATH="$lua_path" "$lua_binary" -e "$(math_preamble "$math_mode") $lua_command" 2>&1; then
+            echo -e "${green}✅ $labelled: ALL TESTS PASSED${nc}"
+            passed_modules+=("$labelled")
+        else
+            echo -e "${red}❌ $labelled: TESTS FAILED${nc}"
+            failed_modules+=("$labelled")
+        fi
+
+        echo
+    done
 }
 
 run_selftest() {
@@ -128,6 +148,11 @@ run_selftest() {
 }
 
 run_selftest "Protobuf operations" "protobuf" "protobuf"
+
+export PB_TEST_DIR="$script_dir/test"
+run_test "Float codec vectors" "float-vectors" "
+    dofile('$script_dir/test/float_vectors_test.lua')
+"
 
 passed_count=${#passed_modules[@]}
 failed_count=${#failed_modules[@]}
