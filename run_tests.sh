@@ -48,9 +48,52 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # This allows require() to find modules in the src/vendor directories
 lua_path="$script_dir/?.lua;$script_dir/?/init.lua;$script_dir/src/?.lua;$script_dir/src/?/init.lua;$script_dir/vendor/?.lua;$LUA_PATH"
 
-# Parse command line arguments to determine which modules to run
-default_modules=("protobuf" "math-fallback" "wire-vectors")
-all_modules=("protobuf" "math-fallback" "wire-vectors")
+# Modules are discovered, never registered. Any test/<name>_test.lua is a
+# module: its key is <name> with underscores as dashes, so
+# test/wire_vectors_test.lua is `wire-vectors` and gets `make test-wire-vectors`
+# from the Makefile's test-% rule for free. Adding a suite is dropping in a file.
+#
+# Two optional directives in the file head override the defaults:
+#
+#   -- @test-name   Label used in the output. Defaults to the key.
+#   -- @test-modes  Space-separated subset of `native fallback`. Defaults to both.
+#
+# A module's contract is the exit code: 0 passed, anything else failed.
+module_keys=()
+declare -a module_files=()
+
+for test_file in "$script_dir"/test/*_test.lua; do
+    [ -e "$test_file" ] || continue
+    base=${test_file##*/}
+    base=${base%_test.lua}
+    key=${base//_/-}
+    module_keys+=("$key")
+    module_files+=("$test_file")
+done
+
+if [ ${#module_keys[@]} -eq 0 ]; then
+    echo -e "${red}Error: no test/*_test.lua modules found${nc}"
+    exit 1
+fi
+
+# Reads a `-- @directive value` line from a module's head.
+module_directive() {
+    sed -n "s/^-- @$2[[:space:]]\{1,\}//p" "$1" | head -1
+}
+
+module_file_for() {
+    local i
+    for i in "${!module_keys[@]}"; do
+        if [ "${module_keys[$i]}" = "$1" ]; then
+            echo "${module_files[$i]}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+default_modules=("${module_keys[@]}")
+all_modules=("${module_keys[@]}")
 modules_to_run=("$@")
 
 # Validate modules if specified
@@ -106,20 +149,28 @@ math_preamble() {
     fi
 }
 
-# Function to run a test and capture result. A fourth argument restricts the
-# module to a single math mode.
-run_test() {
-    local module_name="$1"
-    local module_key="$2"
-    local lua_command="$3"
-    local only_mode="${4:-}"
+# Runs one discovered module, once per math mode it asks for.
+run_module() {
+    local module_key="$1"
+    local test_file
+    test_file=$(module_file_for "$module_key")
 
     if ! should_run_module "$module_key"; then
         return
     fi
 
+    local module_name
+    module_name=$(module_directive "$test_file" "test-name")
+    [ -n "$module_name" ] || module_name="$module_key"
+
+    local wanted_modes
+    wanted_modes=$(module_directive "$test_file" "test-modes")
+    [ -n "$wanted_modes" ] || wanted_modes="${math_modes[*]}"
+
+    local lua_command="dofile('$test_file')"
+
     for math_mode in "${math_modes[@]}"; do
-        if [ -n "$only_mode" ] && [ "$math_mode" != "$only_mode" ]; then
+        if [[ " $wanted_modes " != *" $math_mode "* ]]; then
             continue
         fi
         local labelled="$module_name (math $math_mode)"
@@ -140,33 +191,9 @@ run_test() {
     done
 }
 
-run_selftest() {
-  local module_name="$1"
-  local module_key="$2"
-  local lua_module="$3"
-  run_test "$module_name" "$module_key" "
-    local result = require('$lua_module').selftest()
-    if not result then
-        os.exit(1)
-    end
-  "
-}
-
-run_selftest "Protobuf operations" "protobuf" "protobuf"
-
-# Native only: this module clears the globals and re-requires the module itself
-# to reach the fallbacks, and it needs the native functions surviving as the
-# oracle to compare them against.
-run_test "Math fallbacks" "math-fallback" "
-    dofile('$script_dir/test/math_fallback_test.lua')
-" "native"
-
-# Both math modes: the float and double fields in the corpus run through
-# whichever frexp/ldexp the module bound, so the fallback path gets driven by
-# the whole wire suite rather than by the math test alone.
-run_test "Wire vectors" "wire-vectors" "
-    dofile('$script_dir/test/wire_vectors_test.lua')
-"
+for module_key in "${module_keys[@]}"; do
+    run_module "$module_key"
+done
 
 passed_count=${#passed_modules[@]}
 failed_count=${#failed_modules[@]}

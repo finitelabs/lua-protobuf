@@ -59,6 +59,15 @@ jobs:
       - name: Check
         run: make check
 
+      # Deliberately not part of `make check`: that gate stays runnable on a bare
+      # clone, and this needs the Python venv. CI already provisions it above for
+      # check-types, so the drift gate and the reference cross-check belong here
+      # rather than nowhere. Without this the wire goldens are the one generated
+      # artifact with no CI drift check, and the encode direction is never
+      # verified against the reference implementation at all.
+      - name: Check wire vectors
+        run: make check-wire-vectors
+
   test:
     needs: check
     runs-on: ubuntu-latest

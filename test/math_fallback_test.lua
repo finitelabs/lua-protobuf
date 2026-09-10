@@ -1,3 +1,10 @@
+-- @test-name Math fallbacks
+-- @test-modes native
+--
+-- Native only: this module clears the globals and re-requires the module itself
+-- to reach the fallbacks, and it needs the native functions surviving as the
+-- oracle to compare them against.
+--
 -- Differential check of the module's math.frexp and math.ldexp fallbacks
 -- against the interpreter's native implementations.
 --
@@ -10,6 +17,9 @@
 -- The corpus is enumerated rather than sampled, so the expectations do not
 -- depend on a random seed or on the host's RNG.
 
+local testlib = dofile(debug.getinfo(1, "S").source:match("^@(.*[/\\])") .. "testlib.lua")
+local report = testlib.new("Math fallbacks")
+
 local real_frexp, real_ldexp = math.frexp, math.ldexp
 
 -- Every matrix entry supplies both natively. Their absence means the run is not
@@ -17,8 +27,7 @@ local real_frexp, real_ldexp = math.frexp, math.ldexp
 -- would leave the fallbacks with no assertion at all, which is the state this
 -- test exists to end.
 if not (real_frexp and real_ldexp) then
-  print("Math fallbacks: FAILED, no native math.frexp/math.ldexp to compare against")
-  os.exit(1)
+  report:abort("no native math.frexp/math.ldexp to compare against")
 end
 
 -- Bind a copy of the module against its own fallbacks regardless of which mode
@@ -30,8 +39,7 @@ math.frexp, math.ldexp = real_frexp, real_ldexp
 package.loaded["protobuf"] = nil
 
 if not ok then
-  print("Math fallbacks: FAILED, could not load the module with the globals cleared: " .. tostring(fallback_pb))
-  os.exit(1)
+  report:abort("could not load the module with the globals cleared: " .. tostring(fallback_pb))
 end
 
 local fb_frexp = fallback_pb._math and fallback_pb._math.frexp
@@ -40,55 +48,39 @@ local fb_ldexp = fallback_pb._math and fallback_pb._math.ldexp
 -- Without this the comparison below would run native against native and pass
 -- without exercising a single line of the fallbacks.
 if fb_frexp == nil or fb_ldexp == nil then
-  print("Math fallbacks: FAILED, pb._math is not exposed")
-  os.exit(1)
+  report:abort("pb._math is not exposed")
 end
 if fb_frexp == real_frexp or fb_ldexp == real_ldexp then
-  print("Math fallbacks: FAILED, the module bound the native functions, not its fallbacks")
-  os.exit(1)
+  report:abort("the module bound the native functions, not its fallbacks")
 end
 
-local failures = {}
-local checked = 0
-
-local function record(detail)
-  if #failures < 10 then
-    failures[#failures + 1] = detail
-  else
-    failures.overflow = (failures.overflow or 0) + 1
-  end
-end
+-- `abort` exits, but that is a method call rather than an inline `os.exit`, so
+-- the type checker cannot see the guard above narrows these.
+--- @cast fb_frexp -nil
+--- @cast fb_ldexp -nil
 
 -- == treats the two zeros as equal and every NaN as unequal, neither of which
 -- is the comparison this test wants.
-local function same(a, b)
-  if a ~= a or b ~= b then
-    return a ~= a and b ~= b
-  end
-  if a == 0 and b == 0 then
-    return (1 / a) == (1 / b)
-  end
-  return a == b
-end
+local same = testlib.same_number
 
 local function check_frexp(x, label)
-  checked = checked + 1
+  report:count()
   local want_m, want_e = real_frexp(x)
   local got_m, got_e = fb_frexp(x)
   if not same(want_m, got_m) or want_e ~= got_e then
     -- %s throughout: a broken fallback can return a non-integer or infinite
     -- exponent, and %d raises on those, which would end the run here rather
     -- than reporting this comparison and continuing.
-    record(string.format("frexp(%s) [%s] want (%s, %s) got (%s, %s)", tostring(x), label, tostring(want_m), tostring(want_e), tostring(got_m), tostring(got_e)))
+    report:record(string.format("frexp(%s) [%s] want (%s, %s) got (%s, %s)", tostring(x), label, tostring(want_m), tostring(want_e), tostring(got_m), tostring(got_e)))
   end
 end
 
 local function check_ldexp(m, e, label)
-  checked = checked + 1
+  report:count()
   local want = real_ldexp(m, e)
   local got = fb_ldexp(m, e)
   if not same(want, got) then
-    record(string.format("ldexp(%s, %d) [%s] want %s got %s", tostring(m), e, label, tostring(want), tostring(got)))
+    report:record(string.format("ldexp(%s, %d) [%s] want %s got %s", tostring(m), e, label, tostring(want), tostring(got)))
   end
 end
 
@@ -138,23 +130,12 @@ check_ldexp(0.0, 0, "positive zero")
 check_ldexp(negative_zero, 10, "negative zero")
 check_ldexp(math.huge, -10, "infinity")
 
-print(string.format(
-  "Math fallbacks: %d comparisons, math.frexp %s, 2 ^ -1024 = %.17g",
-  checked,
-  real_frexp and "native present" or "native absent",
-  2 ^ -1024
-))
-
-for _, detail in ipairs(failures) do
-  print("  FAIL: " .. detail)
-end
-if failures.overflow then
-  print(string.format("  FAIL: and %d further mismatches", failures.overflow))
-end
-
-if #failures > 0 then
-  print("Math fallbacks: FAILED")
-  os.exit(1)
-end
-
-print("Math fallbacks: fallbacks match native on every comparison")
+report:finish(
+  string.format(
+    "%d comparisons, math.frexp %s, 2 ^ -1024 = %.17g",
+    report.checked,
+    real_frexp and "native present" or "native absent",
+    2 ^ -1024
+  ),
+  "fallbacks match native on every comparison"
+)

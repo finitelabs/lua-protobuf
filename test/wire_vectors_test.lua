@@ -1,3 +1,9 @@
+-- @test-name Wire vectors
+--
+-- Both math modes: the float and double fields in the corpus run through
+-- whichever frexp/ldexp the module bound, so the fallback path gets driven by
+-- the whole wire suite rather than by the math test alone.
+--
 -- Differential wire-format coverage against the reference protobuf
 -- implementation, driven by test/generated/wire_vectors.lua.
 --
@@ -37,19 +43,11 @@ local MESSAGE = "protobuf_test_messages.proto3.TestAllTypesProto3"
 local root = schema.Message[MESSAGE]
 
 local known_gaps = dofile(here .. "known_gaps.lua")
+local testlib = dofile(here .. "testlib.lua")
+local report = testlib.new("Wire vectors")
 
-local failures = {}
-local version_dependent = {}
-local checked = 0
+local version_dependent = 0
 local expected_failures = 0
-
-local function record(detail)
-  if #failures < 20 then
-    failures[#failures + 1] = detail
-  else
-    failures.overflow = (failures.overflow or 0) + 1
-  end
-end
 
 local function is_int64_field(field)
   local t = schema.DataType
@@ -207,20 +205,20 @@ end
 
 --- Runs one assertion, routing it through the known-gap lists.
 local function assert_case(name, direction, ok, detail)
-  checked = checked + 1
+  report:count()
   local key = name .. " | " .. direction
 
   local unstable = known_gaps.version_dependent[key]
   if unstable then
-    version_dependent[#version_dependent + 1] =
-      string.format("%s (%s): %s", key, unstable, ok and "agrees here" or "differs here")
+    version_dependent = version_dependent + 1
+    report:note(string.format("version dependent: %s (%s): %s", key, unstable, ok and "agrees here" or "differs here"))
     return
   end
 
   local gap = known_gaps.strict[key]
   if gap then
     if ok then
-      record(string.format("%s: listed as a known gap (%s) but PASSED, remove the entry", key, gap))
+      report:record(string.format("%s: listed as a known gap (%s) but PASSED, remove the entry", key, gap))
     else
       expected_failures = expected_failures + 1
     end
@@ -228,7 +226,7 @@ local function assert_case(name, direction, ok, detail)
   end
 
   if not ok then
-    record(string.format("%s: %s", key, detail or "failed"))
+    report:record(string.format("%s: %s", key, detail or "failed"))
   end
 end
 
@@ -257,30 +255,13 @@ for _, vector in ipairs(vectors) do
   end
 end
 
-print(string.format(
-  "Wire vectors: %d assertions over %d vectors, %d known gaps, %d version dependent",
-  checked,
-  #vectors,
-  expected_failures,
-  #version_dependent
-))
-
--- Printed, not asserted: the outcome depends on the interpreter's number model.
--- Reporting keeps the exclusion visible on every run rather than silent.
-for _, detail in ipairs(version_dependent) do
-  print("  version dependent: " .. detail)
-end
-
-for _, detail in ipairs(failures) do
-  print("  FAIL: " .. detail)
-end
-if failures.overflow then
-  print(string.format("  FAIL: and %d further mismatches", failures.overflow))
-end
-
-if #failures > 0 then
-  print("Wire vectors: FAILED")
-  os.exit(1)
-end
-
-print("Wire vectors: reference and Lua agree on every vector")
+report:finish(
+  string.format(
+    "%d assertions over %d vectors, %d known gaps, %d version dependent",
+    report.checked,
+    #vectors,
+    expected_failures,
+    version_dependent
+  ),
+  "reference and Lua agree on every vector"
+)

@@ -17,6 +17,9 @@ lua-protobuf/
 │   ├── nested.proto  # Fixture: nested types, packages, services (check-schema)
 │   ├── maps.proto    # Fixture: map fields and their synthesized entries (check-schema)
 │   ├── test_messages_proto3.proto  # Trimmed upstream conformance message
+│   ├── testlib.lua                 # Shared harness for every *_test.lua module
+│   ├── protobuf_test.lua           # Wraps the embedded selftest()
+│   ├── math_fallback_test.lua      # frexp/ldexp fallbacks vs native
 │   ├── wire_vectors_test.lua       # Differential wire-format suite
 │   ├── known_gaps.lua              # Vectors that fail today, with tickets
 │   └── generated/    # Checked-in generated schema and goldens (not typechecked)
@@ -301,16 +304,54 @@ The `vendor/bitn.lua` file is a vendored copy of the [lua-bitn](https://github.c
 
 ## Testing
 
-Three modules, all driven by `./run_tests.sh` or `make test`:
+### Adding a suite
 
-- **protobuf** — the embedded `selftest()` in `src/protobuf/init.lua`.
+Drop a `test/<name>_test.lua` file in. That is the whole procedure — modules are
+discovered, never registered, so nothing else has to be edited.
+
+The key is `<name>` with underscores as dashes, so `test/wire_vectors_test.lua`
+is `wire-vectors`, runs under `./run_tests.sh wire-vectors`, and gets
+`make test-wire-vectors` from the Makefile's `test-%` rule for free.
+
+**A module's contract is its exit code**: 0 passed, anything else failed. Two
+optional directives in the file head override the defaults:
+
+```lua
+-- @test-name Wire vectors      -- label in the output, defaults to the key
+-- @test-modes native           -- subset of `native fallback`, defaults to both
+```
+
+`test/testlib.lua` is the shared harness: `new(name)` returns a reporter with
+`count`, `record`, `note`, `abort` and `finish`, so a module writes its
+comparisons and nothing else decides how it reports or exits. Use it rather than
+hand-rolling a failure list — the two suites that predated it had drifted to
+different failure caps and three different ways to signal a failure.
+
+### The modules
+
+- **protobuf** — `test/protobuf_test.lua`, a wrapper around the embedded
+  `selftest()` in `src/protobuf/init.lua`.
 - **math-fallback** — `test/math_fallback_test.lua`, differential against the
-  interpreter's native `frexp`/`ldexp`.
+  interpreter's native `frexp`/`ldexp`. Native mode only; it clears the globals
+  itself to reach the fallbacks and needs the natives surviving as the oracle.
 - **wire-vectors** — `test/wire_vectors_test.lua`, differential against the
   reference protobuf implementation.
 
-Each runs twice, once with native `math.frexp`/`math.ldexp` and once with them
-cleared so the module's own fallbacks are bound.
+Each runs once per math mode it asks for: native `math.frexp`/`math.ldexp`, and
+again with them cleared so the module's own fallbacks are bound.
+
+### Where a test belongs
+
+Split by **kind**, not by location:
+
+- **`selftest()` in `src/protobuf/init.lua`** for small, self-contained
+  assertions. It ships inside the amalgamated module on purpose, so it can be run
+  on a controller against the real LuaJIT from a driver. That is coverage no CI
+  run reproduces, and it is why the suite stays in the shipped artifact.
+- **`test/`** for anything generated, oracle-backed or large. These never ship.
+
+A vendored library's tests live in its own repo either way. Nothing test-shaped
+belongs in a driver or in the driver template.
 
 ### Wire vectors
 
@@ -325,6 +366,12 @@ clone. `make gen-wire-vectors` regenerates them and `make check-wire-vectors`
 fails on drift. Neither is part of `make check`: Python is genuinely required
 here, and gating `check` on it would re-create the fresh-clone and `make clean`
 trap that `check-types` already has.
+
+`check-wire-vectors` does run in CI, as its own step in the `check` job, which
+already provisions the venv for `check-types`. Keeping it out of `make check` is
+about a bare clone, not about CI — left out of both, the wire goldens would be
+the one generated artifact with no drift gate, and the encode direction would
+never be checked against the reference implementation at all.
 
 The two directions are asserted differently, and the asymmetry is deliberate:
 
