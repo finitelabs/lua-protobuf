@@ -178,8 +178,56 @@ check-schema:
 	@$(LUA_BINARY) tools/check_schema_refs.lua build/nested.schema.lua
 	@.venv/bin/python3 tools/gen_lua_proto_schema build/maps.schema.lua test/maps.proto
 	@$(LUA_BINARY) tools/check_schema_refs.lua build/maps.schema.lua
+	@.venv/bin/python3 tools/gen_lua_proto_schema build/test_messages_proto3.schema.lua test/test_messages_proto3.proto
+	@$(LUA_BINARY) tools/check_schema_refs.lua build/test_messages_proto3.schema.lua
 	@.venv/bin/python3 tools/gen_lua_proto_schema build/empty.schema.lua empty.proto
 	@$(LUA_BINARY) tools/check_schema_refs.lua build/empty.schema.lua
+
+# Regenerate the checked-in wire-format schema and golden vectors.
+#
+# Deliberately not part of `check`. Python is genuinely required here, unlike the
+# rest of the test suite, so gating `check` on it would re-create the fresh-clone
+# and `make clean` trap that check-types already has. The goldens are checked in
+# so `make test` runs on a bare clone with no Python at all.
+.PHONY: gen-wire-vectors
+gen-wire-vectors:
+	@if [ ! -f .venv/bin/python3 ]; then \
+		echo "Python virtual environment not found. Run 'make setup-schema-generator' first."; \
+		exit 1; \
+	fi
+	@.venv/bin/python3 tools/gen_lua_proto_schema \
+		test/generated/test_messages_proto3_schema.lua test/test_messages_proto3.proto
+	@.venv/bin/python3 tools/gen_wire_vectors \
+		test/generated/wire_vectors.lua test/test_messages_proto3.proto
+
+# Verify the checked-in vectors against the reference implementation: no drift,
+# the goldens read back as the bytes Python wrote, and this library's own
+# encodings parse to an equal message.
+.PHONY: check-wire-vectors
+check-wire-vectors:
+	@if [ ! -f .venv/bin/python3 ]; then \
+		echo "Python virtual environment not found. Run 'make setup-schema-generator' first."; \
+		exit 1; \
+	fi
+	@mkdir -p build
+	@.venv/bin/python3 tools/gen_lua_proto_schema \
+		build/wire.schema.lua.tmp test/test_messages_proto3.proto
+	@.venv/bin/python3 tools/gen_wire_vectors \
+		build/wire_vectors.lua.tmp test/test_messages_proto3.proto
+	@if ! diff -q test/generated/test_messages_proto3_schema.lua build/wire.schema.lua.tmp >/dev/null 2>&1; then \
+		echo "ERROR: test/generated/test_messages_proto3_schema.lua is out of date!"; \
+		echo "Run 'make gen-wire-vectors' to regenerate it."; \
+		diff test/generated/test_messages_proto3_schema.lua build/wire.schema.lua.tmp || true; \
+		exit 1; \
+	fi
+	@if ! diff -q test/generated/wire_vectors.lua build/wire_vectors.lua.tmp >/dev/null 2>&1; then \
+		echo "ERROR: test/generated/wire_vectors.lua is out of date!"; \
+		echo "Run 'make gen-wire-vectors' to regenerate it."; \
+		diff test/generated/wire_vectors.lua build/wire_vectors.lua.tmp || true; \
+		exit 1; \
+	fi
+	@echo "Checked-in wire vectors match the generator."
+	@LUA_BINARY=$(LUA_BINARY) .venv/bin/python3 tools/check_wire_vectors
 
 # Format Lua code with stylua
 .PHONY: format
@@ -254,6 +302,7 @@ help:
 	@echo "  make test-<name>        - Run specific test (e.g., make test-protobuf)"
 	@echo "  make test-matrix        - Run tests across all Lua versions"
 	@echo "  make test-matrix-<name> - Run specific test across all Lua versions"
+	@echo "  make test-wire-vectors  - Run only the wire-format vectors"
 	@echo ""
 	@echo "Building:"
 	@echo "  make build              - Build single-file distributions"
@@ -264,6 +313,10 @@ help:
 	@echo "  make gen-types                             - Regenerate src/protobuf/types.lua"
 	@echo "  make check-types                           - Verify types.lua matches empty.proto"
 	@echo "  make check-schema                          - Verify generated schemas resolve subschemas"
+	@echo ""
+	@echo "Wire Vectors (need Python; deliberately not part of check):"
+	@echo "  make gen-wire-vectors   - Regenerate the checked-in schema and goldens"
+	@echo "  make check-wire-vectors - Check goldens for drift and verify both directions"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  make check              - Run format-check, lint, check-types, check-schema, and typecheck"

@@ -15,7 +15,11 @@ lua-protobuf/
 │   └── requirements.txt      # Python dependencies for schema generator
 ├── test/
 │   ├── nested.proto  # Fixture: nested types, packages, services (check-schema)
-│   └── maps.proto    # Fixture: map fields and their synthesized entries (check-schema)
+│   ├── maps.proto    # Fixture: map fields and their synthesized entries (check-schema)
+│   ├── test_messages_proto3.proto  # Trimmed upstream conformance message
+│   ├── wire_vectors_test.lua       # Differential wire-format suite
+│   ├── known_gaps.lua              # Vectors that fail today, with tickets
+│   └── generated/    # Checked-in generated schema and goldens (not typechecked)
 ├── .github/workflows/
 │   └── build.yml     # CI: check, test matrix, build
 ├── empty.proto       # Empty proto for generating base types
@@ -160,6 +164,19 @@ This is the section to read before assuming a `.proto` will round-trip:
   drops them.
 - **Groups are unsupported.** `DataType` has no `GROUP` (10) and `WireType` has no
   SGROUP (3) / EGROUP (4); both raise `"Unknown wire type"`.
+- **A negative `int32` or `enum` decodes differently per interpreter.** The wire
+  form is a ten-byte sign-extended varint, and `bit64.to_number` is unsigned
+  (`value[1] * 0x100000000 + value[2]`). On 5.3+ that multiply overflows signed
+  64-bit integers and wraps to the correct answer; on 5.1, 5.2 and LuaJIT the
+  operands are doubles, nothing wraps, and `-1` reads as `1.8446744073709552e19`.
+  Four of the six CI matrix entries are the second kind. Note that a current
+  Homebrew `lua` is 5.5, which is **not** in the matrix and does wrap, so this is
+  invisible locally. Tracked as FL-19.
+- **`sfixed32` is unsigned in both directions.** Decode returns `4294967295` for
+  the wire bytes `FFFFFFFF` where the reference returns `-1`, and encoding a
+  negative one raises `bad argument #4 to 'char'`. `sfixed64` is unaffected: its
+  `{high, low}` pair carries the two's-complement bits, so signedness is the
+  caller's interpretation rather than the codec's choice. Tracked as FL-18.
 - **Subnormal floats and doubles are wrong in both directions.** Decode applies
   the implicit leading 1 unconditionally, so `01000000` reads as `5.88e-39`
   instead of `1.40e-45`; encode clamps the exponent to 0 with a zero mantissa, so
@@ -284,9 +301,62 @@ The `vendor/bitn.lua` file is a vendored copy of the [lua-bitn](https://github.c
 
 ## Testing
 
-Tests are embedded in `src/protobuf/init.lua` as a `selftest()` function. The test runner invokes this function and reports results.
+Three modules, all driven by `./run_tests.sh` or `make test`:
 
-Run with: `./run_tests.sh` or `make test`
+- **protobuf** — the embedded `selftest()` in `src/protobuf/init.lua`.
+- **math-fallback** — `test/math_fallback_test.lua`, differential against the
+  interpreter's native `frexp`/`ldexp`.
+- **wire-vectors** — `test/wire_vectors_test.lua`, differential against the
+  reference protobuf implementation.
+
+Each runs twice, once with native `math.frexp`/`math.ldexp` and once with them
+cleared so the module's own fallbacks are bound.
+
+### Wire vectors
+
+`test/generated/wire_vectors.lua` holds golden bytes produced by the reference
+implementation from `test/test_messages_proto3.proto`, paired with the table the
+decoder should produce. Both sides are derived by walking the reference message,
+so neither is hand-computed — which matters, because three hand-written
+expectations in the FL-16 Part 1 work were themselves wrong.
+
+The goldens are **checked in**, so `make test` needs no Python and runs on a bare
+clone. `make gen-wire-vectors` regenerates them and `make check-wire-vectors`
+fails on drift. Neither is part of `make check`: Python is genuinely required
+here, and gating `check` on it would re-create the fresh-clone and `make clean`
+trap that `check-types` already has.
+
+The two directions are asserted differently, and the asymmetry is deliberate:
+
+- **reference → Lua** is strict. The input is byte-exact.
+- **Lua → reference** is semantic, never bytewise. This encoder never packs, so
+  its output will not match `protoc`'s for any repeated scalar even when it is
+  correct. The Lua suite re-decodes the encoder's own output; `make
+  check-wire-vectors` additionally parses those bytes with the reference
+  implementation and compares messages, which normalises packing, field order
+  and map order away.
+
+`test/known_gaps.lua` lists vectors that do not agree with the reference today,
+each with its ticket. It is a machine-checked version of "What is not
+implemented" above, and it should only ever shrink. Two categories:
+
+- **`strict`** must fail. A listed case that starts passing **fails the run**, so
+  an entry can only be removed in the change that fixes the defect.
+- **`version_dependent`** may do either, because the outcome depends on the
+  interpreter's number model. FL-19 is correct on 5.3 and 5.4 and wrong on 5.1,
+  5.2 and LuaJIT, so a strict entry would just move which half of the matrix is
+  red. These are printed on every run — `agrees here` or `differs here` — so the
+  split stays visible instead of becoming a silent exclusion.
+
+Run the suite under more than one interpreter before trusting it. `make test`
+uses whatever `lua` resolves to, which on a current Homebrew is 5.5 and is not a
+matrix entry; `LUA_BINARY=luajit ./run_tests.sh` is the cheapest second opinion
+and is what surfaced FL-19.
+
+`test/generated/` is in `typecheck`'s `ignoreDir`. The schema generator emits the
+shared `@class ProtoSchema` and `ProtoFieldSchema` blocks into every file it
+produces, so a second generated schema in the workspace collides with
+`src/protobuf/types.lua` and reports 32 `duplicate-doc-field` warnings.
 
 ## Schema Generation
 
@@ -320,6 +390,14 @@ Only the *first* `PROTO` file is passed to `protoc`; additional ones are fetched
 and then ignored unless the first imports them. The generator also wraps
 generation in a bare `except` that prints the error and still exits 0, so check
 the output file rather than the exit status.
+
+**Well-known types do not survive.** `--include_imports` is passed and protoc does
+deliver them, but `parse_descriptor_set` skips any file whose package is
+`google.protobuf`, in all four of its loops. So a `.proto` importing
+`google/protobuf/timestamp.proto` generates a field whose `subschema` names
+`google.protobuf.Timestamp` and no message to resolve it against, and
+`check-schema` fails. `test/test_messages_proto3.proto` is vendored with those
+fields trimmed for that reason. Tracked as FL-17.
 
 ## Building
 

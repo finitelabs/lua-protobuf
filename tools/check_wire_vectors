@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""
+Close the two gaps the Lua suite cannot close by itself.
+
+1. Readback. The goldens reach Lua as string literals with decimal escapes, so
+   the bytes the suite asserts against are only the reference implementation's
+   bytes if that encoding survives. A variable-width escape silently produces a
+   different string with no parse error, so this compares what Lua actually
+   reads against what Python actually wrote.
+
+2. The Lua -> reference direction, against the reference rather than against
+   this library's own decoder. The Lua suite re-decodes the encoder's output
+   with a decoder the goldens pin, which is sound but circular in principle.
+   Here the bytes are parsed by the reference implementation and compared as
+   messages, so packing, field order and map order are all normalised away.
+   That is the semantic comparison a byte assertion cannot be: this encoder
+   never packs, so its output will not match `protoc`'s for a repeated scalar
+   even when it is correct.
+
+Needs Python, which is why this is not part of `make check`.
+"""
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+_GEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gen_wire_vectors")
+_module = type(sys)("gen_wire_vectors")
+exec(compile(open(_GEN).read(), _GEN, "exec"), _module.__dict__)
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LUA_PATH = ";".join([
+    os.path.join(REPO, "?.lua"),
+    os.path.join(REPO, "?", "init.lua"),
+    os.path.join(REPO, "src", "?.lua"),
+    os.path.join(REPO, "src", "?", "init.lua"),
+    os.path.join(REPO, "vendor", "?.lua"),
+    "",
+])
+
+
+def run_lua(script: str) -> str:
+    env = dict(os.environ, LUA_PATH=LUA_PATH)
+    binary = os.environ.get("LUA_BINARY", "lua")
+    return subprocess.check_output([binary, script], cwd=REPO, env=env).decode()
+
+
+def main() -> int:
+    proto = os.path.join(REPO, "test", "test_messages_proto3.proto")
+    cls = _module.load_message_class(proto)
+    cases, goldens = {}, {}
+    for name, _note, message, golden_override in _module.build_cases(cls):
+        cases[name] = message
+        goldens[name] = golden_override
+        if goldens[name] is None:
+            goldens[name] = message.SerializeToString(deterministic=True)
+
+    failures = []
+
+    # 1. Readback of the goldens.
+    readback = run_lua(os.path.join(REPO, "tools", "dump_wire_goldens.lua"))
+    seen = set()
+    for line in readback.splitlines():
+        name, hexed = line.split("\t")
+        seen.add(name)
+        if name not in cases:
+            failures.append("readback: %r is in the vector file but not the corpus" % name)
+            continue
+        want = goldens[name]
+        if bytes.fromhex(hexed) != want:
+            failures.append(
+                "readback %r: Lua reads %s, Python wrote %s" % (name, hexed, want.hex()))
+    for name in cases:
+        if name not in seen:
+            failures.append("readback: %r is in the corpus but not the vector file" % name)
+
+    # 2. Lua's encoding, parsed by the reference implementation.
+    gaps = 0
+    unstable = 0
+    compared = 0
+    for line in run_lua(os.path.join(REPO, "tools", "dump_wire_encodings.lua")).splitlines():
+        name, status, payload = line.split("\t", 2)
+        if status == "GAP":
+            gaps += 1
+            continue
+        if status == "VERSION":
+            # Outcome depends on the interpreter's number model, so it is
+            # reported rather than asserted. See test/known_gaps.lua.
+            unstable += 1
+            continue
+        if status == "ERROR":
+            failures.append("encode %r raised: %s" % (name, payload))
+            continue
+        parsed = cls()
+        try:
+            parsed.ParseFromString(bytes.fromhex(payload))
+        except Exception as exc:  # noqa: BLE001 - report, do not abort the sweep
+            failures.append("encode %r produced bytes the reference cannot parse: %s" % (name, exc))
+            continue
+        if parsed != cases[name]:
+            failures.append(
+                "encode %r: reference parsed it to a different message\n"
+                "    want: %r\n    got:  %r" % (name, cases[name], parsed))
+        else:
+            compared += 1
+
+    print("Wire vectors: %d goldens read back, %d encodings compared as messages, "
+          "%d known gaps, %d version dependent" % (len(seen), compared, gaps, unstable))
+    for detail in failures:
+        print("  FAIL: " + detail)
+    if failures:
+        print("Wire vectors: FAILED")
+        return 1
+    print("Wire vectors: the reference implementation agrees with both directions")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

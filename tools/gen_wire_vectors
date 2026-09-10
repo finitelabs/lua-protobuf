@@ -1,0 +1,523 @@
+#!/usr/bin/env python3
+"""
+Generate wire-format golden vectors from the reference protobuf implementation.
+
+Every expectation is derived by walking the reference message, never hand-written.
+Three of the first-pass float expectations written by hand for FL-16 Part 1 were
+themselves wrong, which is the argument for an oracle rather than literals.
+
+The corpus is enumerated, not sampled: no RNG and no seed, so regenerating on a
+different host reproduces the file byte for byte.
+"""
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+
+from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+from google.protobuf.descriptor import FieldDescriptor
+from google.protobuf.internal import encoder as reference_encoder
+
+MESSAGE = "protobuf_test_messages.proto3.TestAllTypesProto3"
+
+INT64_TYPES = {
+    FieldDescriptor.TYPE_INT64,
+    FieldDescriptor.TYPE_UINT64,
+    FieldDescriptor.TYPE_SINT64,
+    FieldDescriptor.TYPE_FIXED64,
+    FieldDescriptor.TYPE_SFIXED64,
+}
+BYTES_TYPES = {FieldDescriptor.TYPE_STRING, FieldDescriptor.TYPE_BYTES}
+
+
+def load_message_class(proto_path: str):
+    """Compile `proto_path` and return the generated-code-free message class."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out = os.path.join(tmpdir, "descriptor.pb")
+        subprocess.check_call([
+            "protoc",
+            "--descriptor_set_out", out,
+            "--include_imports",
+            "--proto_path", os.path.dirname(proto_path) or ".",
+            proto_path,
+        ])
+        fds = descriptor_pb2.FileDescriptorSet()
+        with open(out, "rb") as handle:
+            fds.MergeFromString(handle.read())
+
+    pool = descriptor_pool.DescriptorPool()
+    for file_proto in fds.file:
+        pool.Add(file_proto)
+    return message_factory.GetMessageClass(pool.FindMessageTypeByName(MESSAGE))
+
+
+# -- Lua rendering -----------------------------------------------------------
+
+
+def lua_string(raw: bytes) -> str:
+    """
+    Render bytes as a Lua string literal using three-digit decimal escapes.
+
+    The width is load-bearing. Lua's `\\ddd` consumes up to three digits, so a
+    variable-width `\\10` followed by a literal "0" byte reads back as `\\100`:
+    a different string, silently, with no parse error. Wire data puts digits
+    after small tag bytes constantly.
+    """
+    out = ['"']
+    for byte in raw:
+        char = chr(byte)
+        if char == '"':
+            out.append('\\"')
+        elif char == "\\":
+            out.append("\\\\")
+        elif 0x20 <= byte < 0x7F:
+            out.append(char)
+        else:
+            out.append("\\%03d" % byte)
+    out.append('"')
+    return "".join(out)
+
+
+def lua_number(value: float) -> str:
+    """Render a float or double as a Lua literal. %.17g round-trips a double exactly."""
+    if value != value:
+        return "(0 / 0)"
+    if value == float("inf"):
+        return "math.huge"
+    if value == float("-inf"):
+        return "-math.huge"
+    if value == 0.0:
+        # Distinguishes -0.0, which the codec is documented to preserve.
+        return "-0.0" if str(value)[0] == "-" else "0.0"
+    return "%.17g" % value
+
+
+def int64_pair(value: int) -> str:
+    """Render a 64-bit integer as the {high, low} pair the codec decodes it to."""
+    unsigned = value & 0xFFFFFFFFFFFFFFFF
+    return "I(%d, %d)" % (unsigned >> 32, unsigned & 0xFFFFFFFF)
+
+
+def scalar_to_lua(field: FieldDescriptor, value) -> str:
+    """Render one scalar per the representation the decoder documents."""
+    if field.type in INT64_TYPES:
+        return int64_pair(value)
+    if field.type == FieldDescriptor.TYPE_BOOL:
+        return "true" if value else "false"
+    if field.type in BYTES_TYPES:
+        raw = value.encode("utf-8") if isinstance(value, str) else value
+        return lua_string(raw)
+    if field.type in (FieldDescriptor.TYPE_FLOAT, FieldDescriptor.TYPE_DOUBLE):
+        return lua_number(value)
+    # INT32, UINT32, ENUM, FIXED32, SFIXED32, SINT32 all decode to plain numbers.
+    return str(value)
+
+
+def message_to_lua(message, indent: int) -> str:
+    """
+    Render the table the decoder should produce for `message`.
+
+    Driven by ListFields, which yields exactly the fields the reference
+    implementation put on the wire. A proto3 scalar holding its zero value is not
+    serialized, so it is absent here too, matching a decode that leaves it nil.
+    """
+    pad = "  " * indent
+    inner = "  " * (indent + 1)
+    parts = []
+
+    for field, value in sorted(message.ListFields(), key=lambda pair: pair[0].number):
+        if field.label == FieldDescriptor.LABEL_REPEATED and field.message_type and \
+                field.message_type.GetOptions().map_entry:
+            key_field = field.message_type.fields_by_number[1]
+            value_field = field.message_type.fields_by_number[2]
+            items = []
+            for key in sorted(value.keys(), key=lambda k: (str(type(k)), k)):
+                if value_field.type == FieldDescriptor.TYPE_MESSAGE:
+                    rendered = message_to_lua(value[key], indent + 2)
+                else:
+                    rendered = scalar_to_lua(value_field, value[key])
+                items.append("%s[%s] = %s," % (
+                    "  " * (indent + 2), scalar_to_lua(key_field, key), rendered))
+            parts.append("%s%s = {\n%s\n%s}," % (
+                inner, field.name, "\n".join(items), inner))
+        elif field.label == FieldDescriptor.LABEL_REPEATED:
+            if field.type == FieldDescriptor.TYPE_MESSAGE:
+                items = [message_to_lua(element, indent + 2) for element in value]
+            else:
+                items = [scalar_to_lua(field, element) for element in value]
+            body = ", ".join(items)
+            parts.append("%s%s = { %s }," % (inner, field.name, body))
+        elif field.type == FieldDescriptor.TYPE_MESSAGE:
+            parts.append("%s%s = %s," % (
+                inner, field.name, message_to_lua(value, indent + 1)))
+        else:
+            parts.append("%s%s = %s," % (inner, field.name, scalar_to_lua(field, value)))
+
+    if not parts:
+        return "{}"
+    return "{\n%s\n%s}" % ("\n".join(parts), pad)
+
+
+# -- Corpus ------------------------------------------------------------------
+
+
+def build_cases(cls):
+    """
+    Return the enumerated corpus as (name, note, message) triples.
+
+    Float values are chosen to be exactly representable so that narrowing and
+    tie-rounding play no part here. Subnormals and exact ties belong to FL-16
+    Part 1 and to test/math_fallback_test.lua; including them would make this
+    suite red for a defect it is not the one fixing.
+    """
+    cases = []
+
+    def case(name, note, populate):
+        message = cls()
+        populate(message)
+        cases.append((name, note, message, None))
+
+    def map_entry_wire(field_name, **fields):
+        """
+        Build a map entry that omits a side, using the reference implementation's
+        own encoder primitives for the tag and length prefix.
+
+        The reference's serializer always writes both sides of a map entry even
+        when they hold the zero value, so its output cannot reach the decoder's
+        `default_value` branch for a dropped key or value. Another producer may
+        legitimately drop either, and CLAUDE.md documents that decode applies the
+        defaults, so the branch needs a vector that the reference will not emit.
+        """
+        field = cls.DESCRIPTOR.fields_by_name[field_name]
+        entry_cls = message_factory.GetMessageClass(field.message_type)
+        entry = entry_cls()
+        for key, value in fields.items():
+            setattr(entry, key, value)
+        payload = entry.SerializeToString(deterministic=True)
+        return (
+            reference_encoder.TagBytes(field.number, 2)
+            + reference_encoder._VarintBytes(len(payload))
+            + payload
+        )
+
+    def raw_case(name, note, golden, populate):
+        """
+        A vector whose bytes are assembled rather than serialized whole.
+
+        `populate` describes the message those bytes mean. The generator asserts
+        the reference parses the bytes to exactly that, so the expectation stays
+        oracle-derived rather than asserted by construction.
+        """
+        message = cls()
+        populate(message)
+        parsed = cls()
+        parsed.ParseFromString(golden)
+        if parsed != message:
+            raise AssertionError(
+                "raw vector %r does not parse to the message it claims:\n"
+                "  bytes parse to: %r\n  declared as:    %r" % (name, parsed, message))
+        cases.append((name, note, message, golden))
+
+    # -- Singular scalars, one case per wire type ---------------------------
+    def singular(message):
+        message.optional_int32 = 1
+        message.optional_int64 = 2
+        message.optional_uint32 = 3
+        message.optional_uint64 = 4
+        message.optional_sint32 = 5
+        message.optional_sint64 = 6
+        message.optional_fixed32 = 7
+        message.optional_fixed64 = 8
+        message.optional_sfixed32 = 9
+        message.optional_sfixed64 = 10
+        message.optional_float = 1.5
+        message.optional_double = 2.25
+        message.optional_bool = True
+        message.optional_string = "hello"
+        message.optional_bytes = b"\x00\x01\xfe\xff"
+
+    case("singular scalars", "one value per scalar wire type", singular)
+
+    def boundaries(message):
+        message.optional_int32 = 2147483647
+        message.optional_uint32 = 4294967295
+        message.optional_fixed32 = 4294967295
+        message.optional_sfixed32 = 2147483647
+        message.optional_sint32 = -2147483648
+
+    case("32-bit boundaries", "int32/uint32/fixed32 extremes", boundaries)
+
+    def wide64(message):
+        message.optional_int64 = 4611686018427387903
+        message.optional_uint64 = 18446744073709551615
+        message.optional_fixed64 = 18446744073709551615
+        message.optional_sfixed64 = -4611686018427387904
+        message.optional_sint64 = -4611686018427387904
+
+    case("64-bit beyond 53 bits", "values a double cannot hold exactly", wide64)
+
+    def negative_scalars(message):
+        message.optional_int32 = -1
+        message.optional_int64 = -1
+        message.optional_sint32 = -1
+        message.optional_sint64 = -1
+        message.optional_sfixed64 = -1
+
+    case("negative scalars", "sign extension and zigzag", negative_scalars)
+
+    # Isolated from the vectors above so the FL-18 gap entries suppress only
+    # this defect. A gap listed against a shared vector would also mask any
+    # future regression in the other fields that vector carries.
+    def negative_sfixed32(message):
+        message.optional_sfixed32 = -1
+
+    case("negative sfixed32", "FL-18: sfixed32 is unsigned in both directions",
+         negative_sfixed32)
+
+    def negative_sfixed32_repeated(message):
+        message.repeated_sfixed32.extend([-1, 0, 1])
+        message.packed_sfixed32.extend([-2147483648, 2147483647])
+        message.unpacked_sfixed32.extend([-5])
+
+    case("negative sfixed32, repeated", "FL-18 through the packed and unpacked paths",
+         negative_sfixed32_repeated)
+
+    def strings(message):
+        message.optional_string = "é中\U0001f512"
+        message.optional_bytes = bytes(range(256))
+        message.optional_string_piece = "piece"
+        message.optional_cord = "cord"
+
+    case("strings and bytes", "multibyte UTF-8 and every byte value", strings)
+
+    # -- Nested and recursive messages, DRV-104 -----------------------------
+    def nested(message):
+        message.optional_nested_message.a = 42
+        message.optional_foreign_message.c = 7
+
+    case("nested message", "singular nested and foreign messages", nested)
+
+    def corecursive(message):
+        message.optional_nested_message.a = 1
+        message.optional_nested_message.corecursive.optional_int32 = 2
+        message.optional_nested_message.corecursive.optional_nested_message.a = 3
+
+    case("corecursive nesting", "message nested three deep through NestedMessage", corecursive)
+
+    def recursive(message):
+        message.recursive_message.optional_int32 = 10
+        message.recursive_message.recursive_message.optional_int32 = 20
+
+    case("recursive message", "TestAllTypesProto3 inside itself", recursive)
+
+    def empty_submessage(message):
+        message.optional_nested_message.SetInParent()
+
+    case("present empty submessage", "presence with no fields set", empty_submessage)
+
+    # -- Enums --------------------------------------------------------------
+    def enums(message):
+        message.optional_nested_enum = 2
+        message.optional_foreign_enum = 1
+        message.optional_aliased_enum = 2
+
+    case("enums", "nested, foreign and aliased enums", enums)
+
+    def negative_enum(message):
+        message.optional_nested_enum = -1
+
+    case("negative enum", "NEG = -1 sign-extends to a ten-byte varint", negative_enum)
+
+    # -- Repeated, packed and unpacked, DRV-107 -----------------------------
+    def repeated_default(message):
+        message.repeated_int32.extend([1, 2, 3])
+        message.repeated_int64.extend([4, 5])
+        message.repeated_uint32.extend([6])
+        message.repeated_sint32.extend([-1, 1])
+        message.repeated_fixed32.extend([7, 8])
+        message.repeated_fixed64.extend([9])
+        message.repeated_float.extend([1.5, -2.5])
+        message.repeated_double.extend([3.25])
+        message.repeated_bool.extend([True, False, True])
+
+    case("repeated scalars, proto3 default", "packed by the reference implementation", repeated_default)
+
+    def packed_explicit(message):
+        message.packed_int32.extend([1, 2, 3])
+        message.packed_int64.extend([4, 5])
+        message.packed_sint64.extend([-1, -2])
+        message.packed_fixed32.extend([6, 7])
+        message.packed_double.extend([1.5, 2.5])
+        message.packed_bool.extend([True, False])
+        message.packed_nested_enum.extend([0, 1, 2])
+
+    case("packed repeated", "explicit [packed = true] block", packed_explicit)
+
+    def unpacked_explicit(message):
+        message.unpacked_int32.extend([1, 2, 3])
+        message.unpacked_int64.extend([4, 5])
+        message.unpacked_sint64.extend([-1, -2])
+        message.unpacked_fixed32.extend([6, 7])
+        message.unpacked_double.extend([1.5, 2.5])
+        message.unpacked_bool.extend([True, False])
+        message.unpacked_nested_enum.extend([0, 1, 2])
+
+    case("unpacked repeated", "explicit [packed = false], one tag per element", unpacked_explicit)
+
+    def repeated_length_delimited(message):
+        message.repeated_string.extend(["a", "", "ccc"])
+        message.repeated_bytes.extend([b"\x00", b"\xff\xfe"])
+        message.repeated_nested_message.add().a = 1
+        message.repeated_nested_message.add().a = 2
+        message.repeated_foreign_message.add().c = 3
+
+    case("repeated length-delimited", "strings, bytes and messages are never packed",
+         repeated_length_delimited)
+
+    def repeated_single(message):
+        message.repeated_int32.append(1)
+
+    case("repeated single element", "one-element packed block", repeated_single)
+
+    # -- Maps, DRV-105 -------------------------------------------------------
+    def maps_scalar(message):
+        message.map_int32_int32[1] = 2
+        message.map_int32_int32[-3] = 4
+        message.map_uint32_uint32[5] = 6
+        message.map_sint32_sint32[-7] = 8
+        message.map_fixed32_fixed32[9] = 10
+        message.map_sfixed32_sfixed32[11] = 12
+        message.map_bool_bool[True] = False
+        message.map_int32_float[1] = 1.5
+        message.map_int32_double[2] = 2.25
+
+    case("maps with 32-bit keys", "scalar keys usable as Lua table keys", maps_scalar)
+
+    def maps_int64(message):
+        message.map_int64_int64[1] = 2
+        message.map_uint64_uint64[3] = 4
+        message.map_sint64_sint64[-5] = 6
+        message.map_fixed64_fixed64[7] = 8
+        message.map_sfixed64_sfixed64[-9] = 10
+
+    case("maps with 64-bit keys", "keys arrive as Int64 tables, not lookupable by value",
+         maps_int64)
+
+    def maps_string(message):
+        message.map_string_string["alpha"] = "one"
+        message.map_string_string["beta"] = "two"
+        message.map_string_bytes["gamma"] = b"\x00\xff"
+        message.map_string_nested_message["delta"].a = 5
+        message.map_string_foreign_message["epsilon"].c = 6
+        message.map_string_nested_enum["zeta"] = 2
+        message.map_string_foreign_enum["eta"] = 1
+
+    case("maps with string keys", "message and enum values", maps_string)
+
+    def map_zero_values(message):
+        message.map_int32_int32[0] = 0
+        message.map_string_string[""] = ""
+
+    case("map entries holding zero values",
+         "producer may drop either side of the entry", map_zero_values)
+
+    def map_negative_sfixed32(message):
+        message.map_sfixed32_sfixed32[-11] = -12
+
+    case("map with negative sfixed32 key", "FL-18 reached through a map key and value",
+         map_negative_sfixed32)
+
+    raw_case("map entry with the key omitted",
+             "producer dropped a zero key; decode applies the type's default",
+             map_entry_wire("map_int32_int32", value=7),
+             lambda message: message.map_int32_int32.__setitem__(0, 7))
+
+    raw_case("map entry with the value omitted",
+             "producer dropped a zero value",
+             map_entry_wire("map_int32_int32", key=5),
+             lambda message: message.map_int32_int32.__setitem__(5, 0))
+
+    raw_case("map entry with both sides omitted",
+             "empty entry decodes to the zero key and zero value",
+             map_entry_wire("map_int32_int32"),
+             lambda message: message.map_int32_int32.__setitem__(0, 0))
+
+    raw_case("string map entry with the key omitted",
+             "the dropped side defaults to the empty string, not nil",
+             map_entry_wire("map_string_string", value="only"),
+             lambda message: message.map_string_string.__setitem__("", "only"))
+
+    # -- oneof, wire-level only ---------------------------------------------
+    def oneof_scalar(message):
+        message.oneof_uint32 = 11
+
+    case("oneof scalar arm", "ordinary field on the wire", oneof_scalar)
+
+    def oneof_message(message):
+        message.oneof_nested_message.a = 12
+
+    case("oneof message arm", "ordinary length-delimited field", oneof_message)
+
+    # -- Odd field names -----------------------------------------------------
+    def field_names(message):
+        message.fieldname1 = 1
+        message._field_name3 = 3
+        message.field__name4_ = 4
+        message.FieldName8 = 8
+        message.FIELD_NAME11 = 11
+        message.field_name17__ = 17
+
+    case("unusual field names", "names that survive the schema round trip", field_names)
+
+    # -- Empty ---------------------------------------------------------------
+    case("empty message", "no fields set at all", lambda message: None)
+
+    return cases
+
+
+def render(cases) -> str:
+    header = '''-- Generated wire-format vectors. Do not edit manually.
+--
+-- Produced by tools/gen_wire_vectors from the reference protobuf
+-- implementation against test/test_messages_proto3.proto. Regenerate with
+-- `make gen-wire-vectors`; `make check-wire-vectors` fails on drift.
+--
+-- `golden` is the reference implementation's own serialization. `expected` is
+-- derived by walking that same message, so neither side is hand-computed.
+
+local bit64 = require("bitn").bit64
+local I = bit64.new
+
+return {
+'''
+    body = []
+    for name, note, message, golden_override in cases:
+        golden = golden_override
+        if golden is None:
+            golden = message.SerializeToString(deterministic=True)
+        body.append("  {\n")
+        body.append("    name = %s,\n" % lua_string(name.encode("utf-8")))
+        body.append("    note = %s,\n" % lua_string(note.encode("utf-8")))
+        body.append("    golden = %s,\n" % lua_string(golden))
+        body.append("    expected = %s,\n" % message_to_lua(message, 2))
+        body.append("  },\n")
+    return header + "".join(body) + "}\n"
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", help="Lua output file")
+    parser.add_argument("proto", help="Path to the vendored .proto")
+    args = parser.parse_args()
+
+    cls = load_message_class(args.proto)
+    cases = build_cases(cls)
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    with open(args.output, "w") as handle:
+        handle.write(render(cases))
+    print("Wrote %d wire vectors to %s" % (len(cases), args.output), file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

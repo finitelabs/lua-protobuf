@@ -11,7 +11,7 @@
 # Every module runs twice, once with the interpreter's native math.frexp and
 # math.ldexp and once with them cleared so the module's own fallbacks are bound.
 #
-# Available modules: protobuf, math-fallback
+# Available modules: protobuf, math-fallback, wire-vectors
 
 set -e  # Exit on any error
 
@@ -49,8 +49,8 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 lua_path="$script_dir/?.lua;$script_dir/?/init.lua;$script_dir/src/?.lua;$script_dir/src/?/init.lua;$script_dir/vendor/?.lua;$LUA_PATH"
 
 # Parse command line arguments to determine which modules to run
-default_modules=("protobuf" "math-fallback")
-all_modules=("protobuf" "math-fallback")
+default_modules=("protobuf" "math-fallback" "wire-vectors")
+all_modules=("protobuf" "math-fallback" "wire-vectors")
 modules_to_run=("$@")
 
 # Validate modules if specified
@@ -160,6 +160,13 @@ run_selftest "Protobuf operations" "protobuf" "protobuf"
 run_test "Math fallbacks" "math-fallback" "
     dofile('$script_dir/test/math_fallback_test.lua')
 " "native"
+
+# Both math modes: the float and double fields in the corpus run through
+# whichever frexp/ldexp the module bound, so the fallback path gets driven by
+# the whole wire suite rather than by the math test alone.
+run_test "Wire vectors" "wire-vectors" "
+    dofile('$script_dir/test/wire_vectors_test.lua')
+"
 
 passed_count=${#passed_modules[@]}
 failed_count=${#failed_modules[@]}
