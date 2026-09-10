@@ -461,9 +461,14 @@ Version is automatically injected from git tags during release.
 
 ## CI/CD
 
-- **build.yml**: Runs on push/PR to `main` or `master`
+- **build.yml**: pushes to `main`/`master`, and **every** pull request whatever
+  it targets. The `pull_request` trigger deliberately carries no `branches`
+  filter: with one, a stacked PR against another agent branch got zero check
+  runs and was first tested only after its parent merged and GitHub retargeted
+  it.
   - `check` job — `make check`: format-check, luacheck, check-types, check-schema,
-    and typecheck against lua-language-server 3.19.0
+    and typecheck against lua-language-server 3.19.0, plus `check-wire-vectors`
+    as its own step (see Testing for why it is not inside `make check`)
   - `test` job — `make test-all` across Lua 5.1-5.4, LuaJIT 2.0/2.1
   - `build` job — single-file distributions
   - The `luajit-2.1` matrix entry is silently built as **`luajit-openresty`**:
