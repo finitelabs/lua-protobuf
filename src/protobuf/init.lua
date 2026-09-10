@@ -32,15 +32,51 @@ local bit64_to_number = bit64.to_number
 -- Lua 5.3+ removed math.frexp and math.ldexp; provide polyfills
 local math_frexp = math.frexp
   or function(x)
-    if x == 0 then
-      return 0, 0
+    if x == 0 or x ~= x or x == math.huge or x == -math.huge then
+      return x, 0
     end
     local e = math.floor(math.log(math.abs(x)) / math.log(2)) + 1
-    return x / 2 ^ e, e
+    -- Scaling by a power of two is exact, but only while that power is itself a
+    -- normal double. 2 ^ -e is infinity by e = -1024 and subnormal by e = 1023,
+    -- and LuaJIT 2.0 returns zero for the subnormal end rather than the exact
+    -- value. Split the scale so neither factor ever leaves the normal range.
+    local m
+    if e > 1000 then
+      m = x * 2 ^ -1000 * 2 ^ (1000 - e)
+    elseif e < -1000 then
+      m = x * 2 ^ 1000 * 2 ^ (-e - 1000)
+    else
+      m = x * 2 ^ -e
+    end
+    -- The log quotient lands on the wrong side of an integer for some inputs,
+    -- which puts m outside [0.5, 1). Left uncorrected it reaches exactly 1.0 and
+    -- overflows the mantissa field downstream.
+    while m ~= 0 and (m >= 1 or m <= -1) do
+      m = m / 2
+      e = e + 1
+    end
+    while m ~= 0 and m > -0.5 and m < 0.5 do
+      m = m * 2
+      e = e - 1
+    end
+    return m, e
   end
-local math_ldexp = math.ldexp or function(m, e)
-  return m * 2 ^ e
-end
+local math_ldexp = math.ldexp
+  or function(m, e)
+    -- Same constraint as the frexp fallback above: 2 ^ e is only exact while it
+    -- is itself a normal double, and LuaJIT 2.0 returns zero at the subnormal
+    -- end. Step the scale in normal-range chunks so a representable result is
+    -- never reached through an intermediate infinity or zero.
+    while e > 1000 do
+      m = m * 2 ^ 1000
+      e = e - 1000
+    end
+    while e < -1000 do
+      m = m * 2 ^ -1000
+      e = e + 1000
+    end
+    return m * 2 ^ e
+  end
 
 local NAN = 0 / 0
 local INF = math.huge
@@ -1788,5 +1824,11 @@ function pb.selftest()
   print(string.format("\nProtobuf operations: %d/%d tests passed\n", passed, passed + failed))
   return failed == 0
 end
+
+-- Whichever frexp/ldexp the module bound at load. Exposed so the fallbacks can
+-- be compared against a native implementation directly; the codecs only reach
+-- them over the argument range the wire format produces, which is narrower than
+-- the range the fallbacks have to be correct over.
+pb._math = { frexp = math_frexp, ldexp = math_ldexp }
 
 return pb
