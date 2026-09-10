@@ -383,6 +383,54 @@ return {
     },
   },
   {
+    name = "int32 from a five-byte payload",
+    note = "a uint32 producer's 0xFFFFFFFF read back through a wire-compatible int32",
+    golden = "\008\255\255\255\255\015",
+    expected = {
+      optional_int32 = -1,
+    },
+  },
+  {
+    name = "int32 at the sign boundary",
+    note = "0x80000000 is the low word's first negative value",
+    golden = "\008\128\128\128\128\008",
+    expected = {
+      optional_int32 = -2147483648,
+    },
+  },
+  {
+    name = "int32 with a populated high word",
+    note = "bits above the low word are discarded rather than widening the value",
+    golden = "\008\129\128\128\128\240\255\255\255\255\001",
+    expected = {
+      optional_int32 = 1,
+    },
+  },
+  {
+    name = "enum from a five-byte payload",
+    note = "an enum truncates to 32 bits on the same path as int32",
+    golden = "\168\001\255\255\255\255\015",
+    expected = {
+      optional_nested_enum = -1,
+    },
+  },
+  {
+    name = "uint32 from a ten-byte payload",
+    note = "truncation is unsigned here, so the same bytes are not int32's -1",
+    golden = "\024\255\255\255\255\255\255\255\255\255\001",
+    expected = {
+      optional_uint32 = 4294967295,
+    },
+  },
+  {
+    name = "sint32 from a ten-byte payload",
+    note = "the zigzag input is the truncated low word, not a rounded double",
+    golden = "(\255\255\255\255\255\255\255\255\255\001",
+    expected = {
+      optional_sint32 = -2147483648,
+    },
+  },
+  {
     name = "oneof scalar arm",
     note = "ordinary field on the wire",
     golden = "\248\006\011",

@@ -164,14 +164,6 @@ This is the section to read before assuming a `.proto` will round-trip:
   drops them.
 - **Groups are unsupported.** `DataType` has no `GROUP` (10) and `WireType` has no
   SGROUP (3) / EGROUP (4); both raise `"Unknown wire type"`.
-- **A negative `int32` or `enum` decodes differently per interpreter.** The wire
-  form is a ten-byte sign-extended varint, and `bit64.to_number` is unsigned
-  (`value[1] * 0x100000000 + value[2]`). On 5.3+ that multiply overflows signed
-  64-bit integers and wraps to the correct answer; on 5.1, 5.2 and LuaJIT the
-  operands are doubles, nothing wraps, and `-1` reads as `1.8446744073709552e19`.
-  Four of the six CI matrix entries are the second kind. Note that a current
-  Homebrew `lua` is 5.5, which is **not** in the matrix and does wrap, so this is
-  invisible locally. Tracked as FL-19.
 - **`sfixed32` is unsigned in both directions.** Decode returns `4294967295` for
   the wire bytes `FFFFFFFF` where the reference returns `-1`, and encoding a
   negative one raises `bad argument #4 to 'char'`. `sfixed64` is unaffected: its
@@ -294,6 +286,14 @@ Decode is asymmetric and this is the thing most often got wrong: INT64, UINT64,
 SINT64, FIXED64 and SFIXED64 come back as Int64 **tables**, while INT32, UINT32,
 ENUM, BOOL and FIXED32 come back as plain numbers. `pb.decode_varint` silently
 truncates beyond 53 bits.
+
+The 32-bit varint types do not go through `pb.decode_varint`. INT32, UINT32,
+ENUM and SINT32 read the full `{high, low}` pair and then discard the high word,
+because protobuf truncates a varint to the field's declared width rather than
+widening it: `int32` and `uint32` are wire compatible, so the five-byte payload
+`0xFFFFFFFF` is `4294967295` read as one and `-1` read as the other. Going
+through a plain number instead would make the answer depend on the interpreter's
+number model, which is what FL-19 fixed.
 
 ### Vendor Dependencies
 

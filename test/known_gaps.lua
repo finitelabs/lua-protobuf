@@ -21,19 +21,13 @@ return {
   },
 
   -- May pass or fail depending on the interpreter's number model, so neither
-  -- outcome fails the run. These cannot be strict: FL-19 makes a negative int32
-  -- decode correctly on 5.3 and 5.4, where signed 64-bit arithmetic wraps, and
-  -- incorrectly on 5.1, 5.2 and LuaJIT, where it does not. Demanding a failure
-  -- would turn 5.3 and 5.4 red for the opposite reason.
+  -- outcome fails the run, and the result is printed rather than asserted.
   --
-  -- The result is still printed on every run, so the split stays visible rather
-  -- than becoming a silent exclusion.
-  version_dependent = {
-    ["negative scalars | decode"] = "FL-19",
-    ["negative scalars | encode"] = "FL-19",
-    ["negative enum | decode"] = "FL-19",
-    ["negative enum | encode"] = "FL-19",
-    ["maps with 32-bit keys | decode"] = "FL-19",
-    ["maps with 32-bit keys | encode"] = "FL-19",
-  },
+  -- Empty since FL-19. Its six entries were the only ones: a negative int32 or
+  -- enum decoded correctly on 5.3 and 5.4, where signed 64-bit arithmetic wraps,
+  -- and to 1.8446744073709552e19 on 5.1, 5.2 and LuaJIT, where it does not, so a
+  -- strict entry would only have moved which half of the matrix was red. The
+  -- decoder now truncates to 32 bits explicitly and the vectors are asserted on
+  -- every interpreter.
+  version_dependent = {},
 }
