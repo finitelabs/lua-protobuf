@@ -600,6 +600,27 @@ local function default_value(protoSchema, field)
   return 0
 end
 
+local function ascending(a, b)
+  local ta, tb = type(a), type(b)
+  if ta ~= tb then
+    return ta < tb
+  elseif ta == "table" then
+    return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2])
+  elseif ta == "boolean" then
+    return b and not a
+  end
+  return a < b
+end
+
+local function sorted_keys(t)
+  local keys = {}
+  for key in pairs(t) do
+    keys[#keys + 1] = key
+  end
+  table.sort(keys, ascending)
+  return keys
+end
+
 --- Encodes a map field as the repeated key/value entry messages it is on the wire.
 --- @param protoSchema ProtoSchema The complete proto schema.
 --- @param field ProtoFieldSchema The map field's schema.
@@ -618,7 +639,8 @@ local function encode_map(protoSchema, field, field_number, entries)
   local key = bit32_to_unsigned(bit32_raw_lshift(field_number, 3)) + wire_type
 
   local buffer = ""
-  for entry_key, entry_value in pairs(entries) do
+  for _, entry_key in ipairs(sorted_keys(entries)) do
+    local entry_value = entries[entry_key]
     local entry = pb.encode(protoSchema, entrySchema, {
       [keyField.name] = entry_key,
       [valueField.name] = entry_value,
@@ -636,7 +658,8 @@ end
 function pb.encode(protoSchema, messageSchema, message)
   local buffer = ""
 
-  for field_number, field in pairs(messageSchema.fields) do
+  for _, field_number in ipairs(sorted_keys(messageSchema.fields)) do
+    local field = messageSchema.fields[field_number]
     local values = message[field.name]
     if values ~= nil and field.map then
       buffer = buffer .. encode_map(protoSchema, field, field_number, values)

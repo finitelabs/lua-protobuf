@@ -244,6 +244,9 @@ between the two paths.
 Encode emits only the unpacked spelling. Re-encoding a decoded message therefore
 does not reproduce the original bytes when the producer packed them, which is
 worth knowing before diffing encoder output against a capture.
+Emission order is canonical: fields ascending by number, map entries ascending
+by key. Two encodes of one message are byte-identical, and match the reference's
+order.
 
 Before v0.6.7 decode had no packed branch and read the whole block as one
 LENGTH_DELIMITED value, so a `protoc`-produced message decoded to a single raw
@@ -364,8 +367,7 @@ The two directions are asserted differently, and the asymmetry is deliberate:
   its output will not match `protoc`'s for any repeated scalar even when it is
   correct. The Lua suite re-decodes the encoder's own output; `make
   check-wire-vectors` additionally parses those bytes with the reference
-  implementation and compares messages, which normalises packing, field order
-  and map order away.
+  implementation and compares messages, which normalises packing away.
 
 Every vector must agree with the reference in both directions. There is no list
 of expected failures: a defect the vectors find is fixed in the change that adds
