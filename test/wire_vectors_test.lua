@@ -173,6 +173,53 @@ local function assert_case(name, direction, ok, detail)
   end
 end
 
+local function key_less(a, b)
+  local ta, tb = type(a), type(b)
+  if ta ~= tb then
+    return ta < tb
+  elseif ta == "table" then
+    return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2])
+  elseif ta == "boolean" then
+    return b and not a
+  end
+  return a < b
+end
+
+-- Neither comparison above can see emission order: both re-parse into messages.
+local function check_order(bytes)
+  local pos, last_field, last_key = 1, 0, {}
+  while pos <= #bytes do
+    local tag
+    tag, pos = pb.decode_varint(bytes, pos)
+    local field_number, wire_type = math.floor(tag / 8), tag % 8
+    if field_number < last_field then
+      return false, string.format("field %d emitted after field %d", field_number, last_field)
+    end
+    last_field = field_number
+    local field = root.fields[field_number]
+    if wire_type == schema.WireType.VARINT then
+      pos = select(2, pb.decode_varint(bytes, pos))
+    elseif wire_type == schema.WireType.FIXED64 then
+      pos = pos + 8
+    elseif wire_type == schema.WireType.FIXED32 then
+      pos = pos + 4
+    else
+      local data
+      data, pos = pb.decode_length_delimited(bytes, pos)
+      if field and field.map then
+        local entry_schema = schema.Message[field.subschema]
+        local key = pb.decode(schema, entry_schema, data)[entry_schema.fields[1].name]
+        local previous = last_key[field_number]
+        if previous ~= nil and not key_less(previous, key) then
+          return false, string.format("%s: key %s emitted after %s", field.name, describe(key), describe(previous))
+        end
+        last_key[field_number] = key
+      end
+    end
+  end
+  return true
+end
+
 for _, vector in ipairs(vectors) do
   -- reference -> Lua
   local ok, decoded = pcall(pb.decode, schema, root, vector.golden)
@@ -194,6 +241,8 @@ for _, vector in ipairs(vectors) do
     else
       local equal, detail = compare_message(root, redecoded, vector.expected, MESSAGE)
       assert_case(vector.name, "encode", equal, detail)
+      local ordered, why = check_order(encoded)
+      assert_case(vector.name, "order", ordered, why)
     end
   end
 end
