@@ -12,6 +12,8 @@ lua-protobuf/
 ├── tools/
 │   ├── gen_lua_proto_schema  # Python script to generate Lua schemas from .proto
 │   ├── check_schema_refs.lua # Asserts a generated schema resolves its subschemas
+│   ├── gen_float_vectors     # Python script to generate the IEEE 754 vectors
+│   ├── check_float_vectors   # Re-checks those vectors against the oracle
 │   └── requirements.txt      # Python dependencies for schema generator
 ├── test/
 │   ├── nested.proto  # Fixture: nested types, packages, services (check-schema)
@@ -21,6 +23,7 @@ lua-protobuf/
 │   ├── protobuf_test.lua           # Wraps the embedded selftest()
 │   ├── math_fallback_test.lua      # frexp/ldexp fallbacks vs native
 │   ├── wire_vectors_test.lua       # Differential wire-format suite
+│   ├── float_vectors_test.lua      # Differential IEEE 754 codec suite
 │   └── generated/    # Checked-in generated schema and goldens (not typechecked)
 ├── .github/workflows/
 │   └── build.yml     # CI: check, test matrix, build
@@ -166,11 +169,10 @@ This is the section to read before assuming a `.proto` will round-trip:
   drops them.
 - **Groups are unsupported.** `DataType` has no `GROUP` (10) and `WireType` has no
   SGROUP (3) / EGROUP (4); both raise `"Unknown wire type"`.
-- **Subnormal floats and doubles are wrong in both directions.** Decode applies
-  the implicit leading 1 unconditionally, so `01000000` reads as `5.88e-39`
-  instead of `1.40e-45`; encode clamps the exponent to 0 with a zero mantissa, so
-  any subnormal flushes to zero. NaN, the infinities and negative zero are
-  handled. Tracked as FL-16.
+- **`float` and `double` are fully IEEE 754 in both directions**, including
+  subnormals, the flush-to-zero and overflow-to-infinity boundaries, NaN, the
+  infinities and negative zero. Narrowing a double to a `float` rounds to nearest
+  with ties to even, as the hardware does. Covered by `test/float_vectors_test.lua`.
 
 ### Schema Structure
 
@@ -327,6 +329,8 @@ comparisons and nothing else decides how it reports or exits.
   itself to reach the fallbacks and needs the natives surviving as the oracle.
 - **wire-vectors** — `test/wire_vectors_test.lua`, differential against the
   reference protobuf implementation.
+- **float-vectors** — `test/float_vectors_test.lua`, differential against the C
+  float cast and `struct.pack`.
 
 Each runs once per math mode it asks for: native `math.frexp`/`math.ldexp`, and
 again with them cleared so the module's own fallbacks are bound.
@@ -373,6 +377,30 @@ The two directions are asserted differently, and the asymmetry is deliberate:
 Every vector must agree with the reference in both directions. There is no list
 of expected failures: a defect the vectors find is fixed in the change that adds
 the vector.
+
+### Float vectors
+
+`test/generated/float_vectors.lua` holds IEEE 754 goldens for the `float` and
+`double` codecs. The oracle is `ctypes.c_float` for the double-to-float narrowing,
+which is the cast the hardware performs, and `struct.pack` for the bytes. The same
+checked-in, regenerate, drift-check arrangement as the wire vectors: `make
+gen-float-vectors` and `make check-float-vectors`, neither part of `make check`.
+
+Unlike the wire vectors, **both** directions are strict. A float or double encoding
+is canonical, so there is no representation freedom to allow for.
+
+Each vector carries `units` and `scale`, and the suite asserts
+`value * 2 ^ scale[1] * 2 ^ scale[2] == units` before using the value. That pins
+what `strtod` made of the decimal literal, which no assertion on the codec can do:
+a midpoint that reads back as one of its neighbours still encodes to the golden,
+so it would pass while testing nothing. Two factors because a subnormal double
+needs a scale of 1074 and `2 ^ 1074` is infinity.
+
+Negative zero is emitted as `(-1 / math.huge)`, never as the literal `-0.0`, which
+Lua 5.1 constant-folds to `+0.0`.
+
+Goldens are hex, decoded by a helper at load time, rather than decimal escapes:
+`\\10` followed by a "0" byte reads back as `\\100`.
 
 Run the suite under more than one interpreter before trusting it. `make test`
 uses whatever `lua` resolves to, which on a current Homebrew is 5.5 and is not a
@@ -443,6 +471,7 @@ Version is automatically injected from git tags during release.
 - **build.yml**: Runs on push/PR to `main` or `master`
   - `check` job — `make check`: format-check, luacheck, check-types, check-schema,
     and typecheck against lua-language-server 3.19.0, then `make check-wire-vectors`
+    and `make check-float-vectors`
   - `test` job — `make test-all` across Lua 5.1-5.4, LuaJIT 2.0/2.1
   - `build` job — single-file distributions
   - The `luajit-2.1` matrix entry is silently built as **`luajit-openresty`**:

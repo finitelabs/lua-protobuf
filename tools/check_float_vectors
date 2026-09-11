@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""
+Verify the float vectors against the oracle, independently of the checked-in file.
+
+The Lua suite compares the codecs against `test/generated/float_vectors.lua`, so a
+wrong generator would agree with a wrong codec. Here every expectation is recomputed:
+
+1. Readback: the goldens as Lua reads them equal the bytes Python wrote.
+2. Literals: the decimal `value` and `input` as Lua parses them equal the doubles the
+   generator meant. A midpoint that reads back as a neighbour would still encode to
+   the golden, i.e. it would pass while testing nothing.
+3. Decode: Lua's decode of each golden equals `struct.unpack`.
+4. Encode: Lua's encoding of each input equals the C cast's canonical bytes.
+"""
+import math
+import os
+import struct
+import subprocess
+import sys
+
+_GEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gen_float_vectors")
+_module = type(sys)("gen_float_vectors")
+exec(compile(open(_GEN).read(), _GEN, "exec"), _module.__dict__)
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LUA_PATH = ";".join([
+    os.path.join(REPO, "?.lua"),
+    os.path.join(REPO, "?", "init.lua"),
+    os.path.join(REPO, "src", "?.lua"),
+    os.path.join(REPO, "src", "?", "init.lua"),
+    os.path.join(REPO, "vendor", "?.lua"),
+    "",
+])
+
+
+def run_lua(script: str) -> str:
+    env = dict(os.environ, LUA_PATH=LUA_PATH)
+    binary = os.environ.get("LUA_BINARY", "lua")
+    return subprocess.check_output([binary, script], cwd=REPO, env=env).decode()
+
+
+def identical(left: float, right: float) -> bool:
+    """Bit equality, so that 0.0 and -0.0 differ and two NaNs agree."""
+    if math.isnan(left) or math.isnan(right):
+        return math.isnan(left) and math.isnan(right)
+    return struct.pack("<d", left) == struct.pack("<d", right)
+
+
+def show(value: float) -> str:
+    return "%.17g" % value if math.isfinite(value) else repr(value)
+
+
+def main() -> int:
+    vectors = {vector["name"]: vector for vector in _module.build_cases()}
+    failures = []
+    seen = set()
+    encoded_compared = 0
+    decoded_compared = 0
+
+    for line in run_lua(os.path.join(REPO, "tools", "dump_float_codecs.lua")).splitlines():
+        name, golden_hex, value_text, input_text, decoded_text, encoded_hex = line.split("\t")
+        seen.add(name)
+        vector = vectors.get(name)
+        if vector is None:
+            failures.append("%s is in the vector file but not the corpus" % name)
+            continue
+
+        width = vector["width"]
+        golden = vector["golden"]
+        if bytes.fromhex(golden_hex) != golden:
+            failures.append("readback %s: Lua reads %s, Python wrote %s" % (
+                name, golden_hex, golden.hex()))
+            continue
+
+        expected_input = vector.get("input", vector["value"])
+        for label, text, want in (
+            ("value", value_text, vector["value"]),
+            ("input", input_text, expected_input),
+        ):
+            if not identical(float(text), want):
+                failures.append("literal %s %s: Lua parsed %s, generator meant %s" % (
+                    name, label, text, show(want)))
+
+        # struct.unpack, not the vector's own field: an independent decode oracle.
+        want_decoded = struct.unpack("<f" if width == 4 else "<d", golden)[0]
+        if decoded_text.startswith("ERROR"):
+            failures.append("decode %s raised: %s" % (name, decoded_text[6:]))
+        elif not identical(float(decoded_text), want_decoded):
+            failures.append("decode %s: Lua says %s, struct.unpack says %s" % (
+                name, decoded_text, show(want_decoded)))
+        else:
+            decoded_compared += 1
+
+        if encoded_hex == "SKIP":
+            continue
+        if encoded_hex.startswith("ERROR"):
+            failures.append("encode %s raised: %s" % (name, encoded_hex[6:]))
+            continue
+        want_encoded = _module.pack(
+            _module.narrow(expected_input) if width == 4 else expected_input, width)
+        if bytes.fromhex(encoded_hex) != want_encoded:
+            failures.append("encode %s of %s: Lua says %s, the C cast says %s" % (
+                name, show(expected_input), encoded_hex, want_encoded.hex()))
+        else:
+            encoded_compared += 1
+
+    for name in vectors:
+        if name not in seen:
+            failures.append("%s is in the corpus but not the vector file" % name)
+
+    print("Float vectors: %d goldens read back, %d decodes and %d encodes compared to the oracle"
+          % (len(seen), decoded_compared, encoded_compared))
+    for detail in failures:
+        print("  FAIL: " + detail)
+    if failures:
+        print("Float vectors: FAILED")
+        return 1
+    print("Float vectors: the oracle agrees with both directions")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

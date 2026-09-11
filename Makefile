@@ -222,6 +222,33 @@ check-wire-vectors:
 	@echo "Checked-in wire vectors match the generator."
 	@LUA_BINARY=$(LUA_BINARY) .venv/bin/python3 tools/check_wire_vectors
 
+# Regenerate the checked-in IEEE 754 codec vectors
+.PHONY: gen-float-vectors
+gen-float-vectors:
+	@if [ ! -f .venv/bin/python3 ]; then \
+		echo "Python virtual environment not found. Run 'make setup-schema-generator' first."; \
+		exit 1; \
+	fi
+	@.venv/bin/python3 tools/gen_float_vectors test/generated/float_vectors.lua
+
+# Check float vectors for drift and against the oracle. Needs the venv, so not in `check`.
+.PHONY: check-float-vectors
+check-float-vectors:
+	@if [ ! -f .venv/bin/python3 ]; then \
+		echo "Python virtual environment not found. Run 'make setup-schema-generator' first."; \
+		exit 1; \
+	fi
+	@mkdir -p build
+	@.venv/bin/python3 tools/gen_float_vectors build/float_vectors.lua.tmp
+	@if ! diff -q test/generated/float_vectors.lua build/float_vectors.lua.tmp >/dev/null 2>&1; then \
+		echo "ERROR: test/generated/float_vectors.lua is out of date!"; \
+		echo "Run 'make gen-float-vectors' to regenerate it."; \
+		diff test/generated/float_vectors.lua build/float_vectors.lua.tmp || true; \
+		exit 1; \
+	fi
+	@echo "Checked-in float vectors match the generator."
+	@LUA_BINARY=$(LUA_BINARY) .venv/bin/python3 tools/check_float_vectors
+
 # Format Lua code with stylua
 .PHONY: format
 format:
@@ -296,6 +323,7 @@ help:
 	@echo "  make test-matrix        - Run tests across all Lua versions"
 	@echo "  make test-matrix-<name> - Run specific test across all Lua versions"
 	@echo "  make test-wire-vectors  - Run only the wire-format vectors"
+	@echo "  make test-float-vectors - Run only the IEEE 754 codec vectors"
 	@echo ""
 	@echo "Building:"
 	@echo "  make build              - Build single-file distributions"
@@ -310,6 +338,8 @@ help:
 	@echo "Wire Vectors (need Python; deliberately not part of check):"
 	@echo "  make gen-wire-vectors   - Regenerate the checked-in schema and goldens"
 	@echo "  make check-wire-vectors - Check goldens for drift and verify both directions"
+	@echo "  make gen-float-vectors  - Regenerate the checked-in IEEE 754 vectors"
+	@echo "  make check-float-vectors - Check those vectors for drift and against the oracle"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  make check              - Run format-check, lint, check-types, check-schema, and typecheck"
