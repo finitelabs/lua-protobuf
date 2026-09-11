@@ -367,7 +367,8 @@ The two directions are asserted differently, and the asymmetry is deliberate:
   its output will not match `protoc`'s for any repeated scalar even when it is
   correct. The Lua suite re-decodes the encoder's own output; `make
   check-wire-vectors` additionally parses those bytes with the reference
-  implementation and compares messages, which normalises packing, field order and map order away.
+  implementation and compares messages, which normalises packing, field order
+  and map order away.
 
 Every vector must agree with the reference in both directions. There is no list
 of expected failures: a defect the vectors find is fixed in the change that adds
