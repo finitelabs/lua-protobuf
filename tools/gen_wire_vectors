@@ -181,6 +181,29 @@ def build_cases(cls):
             + payload
         )
 
+    def varint_field_wire(field_name, raw):
+        """
+        Build a varint field carrying `raw` as its full unsigned 64-bit payload.
+
+        The reference's serializer only ever emits the canonical width for the
+        value it holds, so it cannot produce a 32-bit field whose payload has
+        bits above the low word: writing `int32 = -1` always yields the ten-byte
+        sign-extended form and never the five-byte `0xFFFFFFFF` that a `uint32`
+        producer writes for the same field number. int32 and uint32 are wire
+        compatible by design, so that encoding reaches a real decoder, and only
+        an assembled vector can carry it.
+        """
+        field = cls.DESCRIPTOR.fields_by_name[field_name]
+        payload = bytearray()
+        remaining = raw & 0xFFFFFFFFFFFFFFFF
+        while True:
+            group = remaining & 0x7F
+            remaining >>= 7
+            payload.append(group | 0x80 if remaining else group)
+            if not remaining:
+                break
+        return reference_encoder.TagBytes(field.number, 0) + bytes(payload)
+
     def raw_case(name, note, golden, populate):
         """
         A vector from assembled bytes, asserted to parse to `populate`'s message.
@@ -421,6 +444,48 @@ def build_cases(cls):
              "the dropped side defaults to the empty string, not nil",
              map_entry_wire("map_string_string", value="only"),
              lambda message: message.map_string_string.__setitem__("", "only"))
+
+    # -- 32-bit varints whose payload exceeds the low word, FL-19 -----------
+    #
+    # Every vector here is red on all six matrix entries before the fix, which
+    # is what makes the suite unable to accept 5.3's signed-64-bit wraparound as
+    # a pass: wraparound reproduces the low word, and the low word is not the
+    # answer for any of these.
+
+    raw_case("int32 from a five-byte payload",
+             "a uint32 producer's 0xFFFFFFFF read back through a wire-compatible int32",
+             varint_field_wire("optional_int32", 0xFFFFFFFF),
+             lambda message: setattr(message, "optional_int32", -1))
+
+    raw_case("int32 at the sign boundary",
+             "0x80000000 is the low word's first negative value",
+             varint_field_wire("optional_int32", 0x80000000),
+             lambda message: setattr(message, "optional_int32", -2147483648))
+
+    raw_case("int32 with a populated high word",
+             "bits above the low word are discarded rather than widening the value",
+             varint_field_wire("optional_int32", 0xFFFFFFFF00000001),
+             lambda message: setattr(message, "optional_int32", 1))
+
+    raw_case("enum from a five-byte payload",
+             "an enum truncates to 32 bits on the same path as int32",
+             varint_field_wire("optional_nested_enum", 0xFFFFFFFF),
+             lambda message: setattr(message, "optional_nested_enum", -1))
+
+    raw_case("uint32 from a ten-byte payload",
+             "truncation is unsigned here, so the same bytes are not int32's -1",
+             varint_field_wire("optional_uint32", 0xFFFFFFFFFFFFFFFF),
+             lambda message: setattr(message, "optional_uint32", 4294967295))
+
+    # A smaller high word does not discriminate: zigzag_decode32 is built from
+    # 32-bit primitives that truncate their own input, so it already reads
+    # 0x100000001 as -1. Only a payload wide enough to lose precision as a
+    # double reaches the defect, where the old path handed those primitives
+    # 1.8446744073709552e19 and they returned 0.
+    raw_case("sint32 from a ten-byte payload",
+             "the zigzag input is the truncated low word, not a rounded double",
+             varint_field_wire("optional_sint32", 0xFFFFFFFFFFFFFFFF),
+             lambda message: setattr(message, "optional_sint32", -2147483648))
 
     # -- oneof, wire-level only ---------------------------------------------
     def oneof_scalar(message):

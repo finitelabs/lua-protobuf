@@ -533,6 +533,21 @@ function pb.decode_length_delimited(buffer, pos)
   return data, new_pos + length
 end
 
+--- Reads the low 32 bits of a decoded varint as a signed two's complement value.
+---
+--- The reference implementation truncates a varint to the field's declared
+--- width rather than widening it, so the five-byte payload `0xFFFFFFFF` is -1
+--- as an int32 even though no sign bit is set at 64 bits.
+--- @param pair Int64HighLow The decoded varint as a {high_32, low_32} pair.
+--- @return integer value The low word interpreted as a signed 32-bit integer.
+local function varint_to_int32(pair)
+  local low = pair[2]
+  if low >= 0x80000000 then
+    return low - 0x100000000
+  end
+  return low
+end
+
 --- Decodes one non-length-delimited value off the wire.
 --- @param protoSchema ProtoSchema The complete proto schema.
 --- @param fieldType integer The field's data type, which selects among the wire type's readings.
@@ -553,14 +568,20 @@ local function decode_scalar(protoSchema, fieldType, wireType, buffer, pos)
       value = pb.zigzag_decode64(raw)
     elseif fieldType == protoSchema.DataType.SINT32 then
       local raw
-      raw, pos = pb.decode_varint(buffer, pos)
-      value = pb.zigzag_decode32(raw)
+      raw, pos = pb.decode_varint64(buffer, pos)
+      value = pb.zigzag_decode32(raw[2])
     elseif fieldType == protoSchema.DataType.BOOL then
       value, pos = pb.decode_varint(buffer, pos)
       value = value ~= 0 -- Convert to boolean
+    elseif fieldType == protoSchema.DataType.UINT32 then
+      local raw
+      raw, pos = pb.decode_varint64(buffer, pos)
+      value = raw[2]
     else
-      -- INT32, UINT32, ENUM, etc.
-      value, pos = pb.decode_varint(buffer, pos)
+      -- INT32, ENUM
+      local raw
+      raw, pos = pb.decode_varint64(buffer, pos)
+      value = varint_to_int32(raw)
     end
   elseif wireType == protoSchema.WireType.FIXED64 then
     if fieldType == protoSchema.DataType.DOUBLE then
