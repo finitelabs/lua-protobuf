@@ -387,8 +387,8 @@ function pb.encode_double(value)
 
   local m = bit64_from_number(mantissa * 0x10000000000000) -- 52 bits: 20 in high, 32 in low
   local high = bit32_raw_bor(bit32_raw_lshift(sign, 31), bit32_raw_lshift(e, 20))
-  high = bit32_raw_bor(high, bit32_raw_band(m[1], 0xFFFFF))
-  return bit64_u64_to_le_bytes(bit64_new(high, m[2]))
+  m[1] = bit32_raw_bor(high, bit32_raw_band(m[1], 0xFFFFF))
+  return bit64_u64_to_le_bytes(m)
 end
 
 --- Decodes an 8-byte IEEE 754 double-precision format into a floating-point number.
@@ -402,7 +402,8 @@ function pb.decode_double(buffer, pos)
 
   local sign = bit32_raw_rshift(high, 31)
   local e = bit32_raw_band(bit32_raw_rshift(high, 20), 0x7FF)
-  local m = bit64_to_number(bit64_new(bit32_raw_band(high, 0xFFFFF), word[2]))
+  word[1] = bit32_raw_band(high, 0xFFFFF)
+  local m = bit64_to_number(word)
 
   if e == 0 and m == 0 then
     return sign == 1 and NEG_ZERO or 0, pos + 8
