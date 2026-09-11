@@ -171,10 +171,6 @@ This is the section to read before assuming a `.proto` will round-trip:
   instead of `1.40e-45`; encode clamps the exponent to 0 with a zero mantissa, so
   any subnormal flushes to zero. NaN, the infinities and negative zero are
   handled. Tracked as FL-16.
-- **The `frexp` fallback is not exact.** `math_frexp` falls back to a `math.log`
-  computation when `math.frexp` is absent, and that fallback can return a
-  mantissa of exactly 1.0, which encodes some normal doubles a factor of two too
-  small. Every CI target has a native `math.frexp`, so nothing exercises it.
 
 ### Schema Structure
 
