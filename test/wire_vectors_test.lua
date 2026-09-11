@@ -18,12 +18,8 @@ local vectors = dofile(here .. "generated/wire_vectors.lua")
 local MESSAGE = "protobuf_test_messages.proto3.TestAllTypesProto3"
 local root = schema.Message[MESSAGE]
 
-local known_gaps = dofile(here .. "known_gaps.lua")
 local testlib = dofile(here .. "testlib.lua")
 local report = testlib.new("Wire vectors")
-
-local version_dependent = 0
-local expected_failures = 0
 
 local function is_int64_field(field)
   local t = schema.DataType
@@ -172,27 +168,8 @@ end
 
 local function assert_case(name, direction, ok, detail)
   report:count()
-  local key = name .. " | " .. direction
-
-  local unstable = known_gaps.version_dependent[key]
-  if unstable then
-    version_dependent = version_dependent + 1
-    report:note(string.format("version dependent: %s (%s): %s", key, unstable, ok and "agrees here" or "differs here"))
-    return
-  end
-
-  local gap = known_gaps.strict[key]
-  if gap then
-    if ok then
-      report:record(string.format("%s: listed as a known gap (%s) but PASSED, remove the entry", key, gap))
-    else
-      expected_failures = expected_failures + 1
-    end
-    return
-  end
-
   if not ok then
-    report:record(string.format("%s: %s", key, detail or "failed"))
+    report:record(string.format("%s | %s: %s", name, direction, detail or "failed"))
   end
 end
 
@@ -222,12 +199,6 @@ for _, vector in ipairs(vectors) do
 end
 
 report:finish(
-  string.format(
-    "%d assertions over %d vectors, %d known gaps, %d version dependent",
-    report.checked,
-    #vectors,
-    expected_failures,
-    version_dependent
-  ),
+  string.format("%d assertions over %d vectors", report.checked, #vectors),
   "reference and Lua agree on every vector"
 )

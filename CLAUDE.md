@@ -21,7 +21,6 @@ lua-protobuf/
 │   ├── protobuf_test.lua           # Wraps the embedded selftest()
 │   ├── math_fallback_test.lua      # frexp/ldexp fallbacks vs native
 │   ├── wire_vectors_test.lua       # Differential wire-format suite
-│   ├── known_gaps.lua              # Vectors that fail today, with tickets
 │   └── generated/    # Checked-in generated schema and goldens (not typechecked)
 ├── .github/workflows/
 │   └── build.yml     # CI: check, test matrix, build
@@ -167,11 +166,6 @@ This is the section to read before assuming a `.proto` will round-trip:
   drops them.
 - **Groups are unsupported.** `DataType` has no `GROUP` (10) and `WireType` has no
   SGROUP (3) / EGROUP (4); both raise `"Unknown wire type"`.
-- **`sfixed32` is unsigned in both directions.** Decode returns `4294967295` for
-  the wire bytes `FFFFFFFF` where the reference returns `-1`, and encoding a
-  negative one raises `bad argument #4 to 'char'`. `sfixed64` is unaffected: its
-  `{high, low}` pair carries the two's-complement bits, so signedness is the
-  caller's interpretation rather than the codec's choice. Tracked as FL-18.
 - **Subnormal floats and doubles are wrong in both directions.** Decode applies
   the implicit leading 1 unconditionally, so `01000000` reads as `5.88e-39`
   instead of `1.40e-45`; encode clamps the exponent to 0 with a zero mantissa, so
@@ -377,17 +371,9 @@ The two directions are asserted differently, and the asymmetry is deliberate:
   implementation and compares messages, which normalises packing, field order
   and map order away.
 
-`test/known_gaps.lua` lists vectors that do not agree with the reference today,
-each with its ticket. It is a machine-checked version of "What is not
-implemented" above, and it should only ever shrink. Two categories:
-
-- **`strict`** must fail. A listed case that starts passing **fails the run**, so
-  an entry can only be removed in the change that fixes the defect.
-- **`version_dependent`** may do either, because the outcome depends on the
-  interpreter's number model. FL-19 is correct on 5.3 and 5.4 and wrong on 5.1,
-  5.2 and LuaJIT, so a strict entry would just move which half of the matrix is
-  red. These are printed on every run — `agrees here` or `differs here` — so the
-  split stays visible instead of becoming a silent exclusion.
+Every vector must agree with the reference in both directions. There is no list
+of expected failures: a defect the vectors find is fixed in the change that adds
+the vector.
 
 Run the suite under more than one interpreter before trusting it. `make test`
 uses whatever `lua` resolves to, which on a current Homebrew is 5.5 and is not a

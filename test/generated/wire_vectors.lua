@@ -71,7 +71,7 @@ return {
   },
   {
     name = "negative sfixed32",
-    note = "FL-18: sfixed32 is unsigned in both directions",
+    note = "sfixed32 is signed in both directions",
     golden = "M\255\255\255\255",
     expected = {
       optional_sfixed32 = -1,
@@ -79,7 +79,7 @@ return {
   },
   {
     name = "negative sfixed32, repeated",
-    note = "FL-18 through the packed and unpacked paths",
+    note = "negative sfixed32 through the packed and unpacked paths",
     golden = "\186\002\012\255\255\255\255\000\000\000\000\001\000\000\000\154\005\008\000\000\000\128\255\255\255\127\141\006\251\255\255\255",
     expected = {
       repeated_sfixed32 = { -1, 0, 1 },
@@ -334,7 +334,7 @@ return {
   },
   {
     name = "map with negative sfixed32 key",
-    note = "FL-18 reached through a map key and value",
+    note = "negative sfixed32 as a map key and value",
     golden = "\130\004\010\013\245\255\255\255\021\244\255\255\255",
     expected = {
       map_sfixed32_sfixed32 = {

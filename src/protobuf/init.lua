@@ -16,6 +16,7 @@ local bit32_raw_bor = bit32.raw_bor
 local bit32_raw_bxor = bit32.raw_bxor
 local bit32_raw_lshift = bit32.raw_lshift
 local bit32_raw_rshift = bit32.raw_rshift
+local bit32_to_signed = bit32.to_signed
 local bit32_to_unsigned = bit32.to_unsigned
 local bit32_u32_to_le_bytes = bit32.u32_to_le_bytes
 local bit64_eq = bit64.eq
@@ -224,7 +225,7 @@ end
 --- @param value integer The 32-bit integer to encode.
 --- @return string bytes The encoded 4-byte sequence.
 function pb.encode_fixed32(value)
-  if value < 0 or value > 0xFFFFFFFF then
+  if value < -0x80000000 or value > 0xFFFFFFFF then
     error("fixed32 value out of range: " .. tostring(value), 2)
   end
   return bit32_u32_to_le_bytes(value)
@@ -441,12 +442,7 @@ end
 --- @param value integer The zigzag-encoded value.
 --- @return integer decoded The signed integer.
 function pb.zigzag_decode32(value)
-  local result = bit32_raw_bxor(bit32_raw_rshift(value, 1), -bit32_raw_band(value, 1))
-  -- Convert unsigned to signed if high bit is set
-  if result >= 0x80000000 then
-    result = result - 0x100000000
-  end
-  return result
+  return bit32_to_signed(bit32_raw_bxor(bit32_raw_rshift(value, 1), -bit32_raw_band(value, 1)))
 end
 
 --- Encodes a signed 64-bit integer using zigzag encoding.
@@ -494,21 +490,6 @@ function pb.decode_length_delimited(buffer, pos)
   return data, new_pos + length
 end
 
---- Reads the low 32 bits of a decoded varint as a signed two's complement value.
----
---- The reference implementation truncates a varint to the field's declared
---- width rather than widening it, so the five-byte payload `0xFFFFFFFF` is -1
---- as an int32 even though no sign bit is set at 64 bits.
---- @param pair Int64HighLow The decoded varint as a {high_32, low_32} pair.
---- @return integer value The low word interpreted as a signed 32-bit integer.
-local function varint_to_int32(pair)
-  local low = pair[2]
-  if low >= 0x80000000 then
-    return low - 0x100000000
-  end
-  return low
-end
-
 --- Decodes one non-length-delimited value off the wire.
 --- @param protoSchema ProtoSchema The complete proto schema.
 --- @param fieldType integer The field's data type, which selects among the wire type's readings.
@@ -539,10 +520,10 @@ local function decode_scalar(protoSchema, fieldType, wireType, buffer, pos)
       raw, pos = pb.decode_varint64(buffer, pos)
       value = raw[2]
     else
-      -- INT32, ENUM
+      -- INT32, ENUM: truncated to the low word, so 0xFFFFFFFF reads as -1.
       local raw
       raw, pos = pb.decode_varint64(buffer, pos)
-      value = varint_to_int32(raw)
+      value = bit32_to_signed(raw[2])
     end
   elseif wireType == protoSchema.WireType.FIXED64 then
     if fieldType == protoSchema.DataType.DOUBLE then
@@ -554,8 +535,11 @@ local function decode_scalar(protoSchema, fieldType, wireType, buffer, pos)
   elseif wireType == protoSchema.WireType.FIXED32 then
     if fieldType == protoSchema.DataType.FLOAT then
       value, pos = pb.decode_float(buffer, pos)
+    elseif fieldType == protoSchema.DataType.SFIXED32 then
+      value, pos = pb.decode_fixed32(buffer, pos)
+      value = bit32_to_signed(value)
     else
-      -- FIXED32, SFIXED32
+      -- FIXED32
       value, pos = pb.decode_fixed32(buffer, pos)
     end
   else

@@ -265,11 +265,10 @@ def build_cases(cls):
 
     case("negative scalars", "sign extension and zigzag", negative_scalars)
 
-    # Kept separate so its known-gap entries cannot mask regressions in other fields.
     def negative_sfixed32(message):
         message.optional_sfixed32 = -1
 
-    case("negative sfixed32", "FL-18: sfixed32 is unsigned in both directions",
+    case("negative sfixed32", "sfixed32 is signed in both directions",
          negative_sfixed32)
 
     def negative_sfixed32_repeated(message):
@@ -277,7 +276,7 @@ def build_cases(cls):
         message.packed_sfixed32.extend([-2147483648, 2147483647])
         message.unpacked_sfixed32.extend([-5])
 
-    case("negative sfixed32, repeated", "FL-18 through the packed and unpacked paths",
+    case("negative sfixed32, repeated", "negative sfixed32 through the packed and unpacked paths",
          negative_sfixed32_repeated)
 
     def strings(message):
@@ -422,7 +421,7 @@ def build_cases(cls):
     def map_negative_sfixed32(message):
         message.map_sfixed32_sfixed32[-11] = -12
 
-    case("map with negative sfixed32 key", "FL-18 reached through a map key and value",
+    case("map with negative sfixed32 key", "negative sfixed32 as a map key and value",
          map_negative_sfixed32)
 
     raw_case("map entry with the key omitted",

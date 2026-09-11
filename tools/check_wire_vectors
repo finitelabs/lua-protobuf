@@ -62,18 +62,9 @@ def main() -> int:
             failures.append("readback: %r is in the corpus but not the vector file" % name)
 
     # 2. Lua's encoding, parsed by the reference implementation.
-    gaps = 0
-    unstable = 0
     compared = 0
     for line in run_lua(os.path.join(REPO, "tools", "dump_wire_encodings.lua")).splitlines():
         name, status, payload = line.split("\t", 2)
-        if status == "GAP":
-            gaps += 1
-            continue
-        if status == "VERSION":
-            # Reported, not asserted. See test/known_gaps.lua.
-            unstable += 1
-            continue
         if status == "ERROR":
             failures.append("encode %r raised: %s" % (name, payload))
             continue
@@ -90,8 +81,7 @@ def main() -> int:
         else:
             compared += 1
 
-    print("Wire vectors: %d goldens read back, %d encodings compared as messages, "
-          "%d known gaps, %d version dependent" % (len(seen), compared, gaps, unstable))
+    print("Wire vectors: %d goldens read back, %d encodings compared as messages" % (len(seen), compared))
     for detail in failures:
         print("  FAIL: " + detail)
     if failures:
