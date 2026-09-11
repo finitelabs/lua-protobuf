@@ -62,6 +62,9 @@ jobs:
       - name: Check wire vectors
         run: make check-wire-vectors
 
+      - name: Check float vectors
+        run: make check-float-vectors
+
   test:
     needs: check
     runs-on: ubuntu-latest

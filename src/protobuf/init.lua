@@ -83,6 +83,28 @@ local math_ldexp = math.ldexp
     return m * 2 ^ e
   end
 
+--- Rounds to the nearest integer with ties to even, which is the IEEE 754 default and
+--- the rule the hardware applies when it narrows a double to a float.
+--- @param x number A non-negative value below 2 ^ 53, so `x - floor(x)` is exact.
+--- @return number rounded
+local function round_half_even(x)
+  local lower = math.floor(x)
+  local fraction = x - lower
+  if fraction > 0.5 then
+    return lower + 1
+  elseif fraction < 0.5 then
+    return lower
+  elseif lower % 2 == 0 then
+    return lower
+  end
+  return lower + 1
+end
+
+-- The smallest normal at each width. Below these an IEEE value is subnormal: no
+-- implicit leading one, and an exponent pinned at the minimum instead of scaling.
+local FLOAT_MIN_NORMAL = 2 ^ -126
+local DOUBLE_MIN_NORMAL = 2 ^ -1022
+
 local NAN = 0 / 0
 local INF = math.huge
 -- Lua 5.1 constant-folds the literal -0.0 to +0.0, and LuaJIT does the same to
@@ -285,24 +307,29 @@ function pb.encode_float(value)
     value = -value
   end
 
-  local mantissa, exponent = math_frexp(value)
-  exponent = exponent - 1
-  mantissa = mantissa * 2 - 1
-
-  local e = exponent + 127
-  if e < 0 then
+  local e, m
+  if value < FLOAT_MIN_NORMAL then
+    -- Subnormal: the mantissa is the whole value counted in units of the smallest
+    -- one, since there is no implicit leading bit to subtract off.
     e = 0
-    mantissa = 0
-  elseif e >= 255 then
-    -- 255 is the all-ones exponent, so it has to be reached by clamping too:
-    -- leaving it to a finite input would emit a nonzero mantissa, i.e. a NaN.
-    e = 255
-    mantissa = 0
+    m = round_half_even(math_ldexp(value, 149))
+  else
+    local mantissa, exponent = math_frexp(value)
+    e = exponent - 1 + 127
+    if e >= 255 then
+      -- 255 is the all-ones exponent, so it has to be reached by clamping too:
+      -- leaving it to a finite input would emit a nonzero mantissa, i.e. a NaN.
+      e = 255
+      m = 0
+    else
+      m = round_half_even((mantissa * 2 - 1) * 0x800000)
+    end
   end
 
-  local m = math.floor(mantissa * 0x800000 + 0.5)
-  -- Rounding to nearest can carry out of the mantissa. Bit 23 of m would land on
-  -- the exponent's low bit below, which absorbs the carry when that bit is set.
+  -- Rounding to nearest can carry out of the mantissa. Bit 23 of m lands on the
+  -- exponent's low bit below, which is the wanted answer in both bands: a subnormal
+  -- carries into the smallest normal, a normal into the next binade, and the largest
+  -- finite into the all-ones exponent, i.e. infinity.
   if m >= 0x800000 then
     m = 0
     e = e + 1
@@ -338,7 +365,14 @@ function pb.decode_float(buffer, pos)
     return NAN, pos + 4
   end
 
-  local result = math_ldexp(1 + m / 0x800000, e - 127)
+  -- A subnormal carries no implicit leading one and sits at the minimum exponent
+  -- rather than at the bias.
+  local result
+  if e == 0 then
+    result = math_ldexp(m / 0x800000, -126)
+  else
+    result = math_ldexp(1 + m / 0x800000, e - 127)
+  end
   if sign == 1 then
     result = -result
   end
@@ -372,20 +406,23 @@ function pb.encode_double(value)
     value = -value
   end
 
-  local mantissa, exponent = math_frexp(value)
-  exponent = exponent - 1
-  mantissa = mantissa * 2 - 1
-
-  local e = exponent + 1023
-  if e < 0 then
+  -- 52 bits of mantissa either way: 20 in high, 32 in low.
+  local e, m
+  if value < DOUBLE_MIN_NORMAL then
+    -- Subnormal, as in encode_float. No rounding: a double below this boundary is
+    -- already a whole multiple of the smallest subnormal, so the scale is exact.
     e = 0
-    mantissa = 0
-  elseif e > 2047 then
-    e = 2047
-    mantissa = 0
+    m = bit64_from_number(math_ldexp(value, 1074))
+  else
+    local mantissa, exponent = math_frexp(value)
+    e = exponent - 1 + 1023
+    if e > 2047 then
+      e = 2047
+      m = bit64_from_number(0)
+    else
+      m = bit64_from_number((mantissa * 2 - 1) * 0x10000000000000)
+    end
   end
-
-  local m = bit64_from_number(mantissa * 0x10000000000000) -- 52 bits: 20 in high, 32 in low
   local high = bit32_raw_bor(bit32_raw_lshift(sign, 31), bit32_raw_lshift(e, 20))
   m[1] = bit32_raw_bor(high, bit32_raw_band(m[1], 0xFFFFF))
   return bit64_u64_to_le_bytes(m)
@@ -418,7 +455,13 @@ function pb.decode_double(buffer, pos)
     return NAN, pos + 8
   end
 
-  local result = math_ldexp(1 + m / 0x10000000000000, e - 1023)
+  -- Subnormal, as in decode_float.
+  local result
+  if e == 0 then
+    result = math_ldexp(m / 0x10000000000000, -1022)
+  else
+    result = math_ldexp(1 + m / 0x10000000000000, e - 1023)
+  end
   if sign == 1 then
     result = -result
   end
@@ -605,6 +648,7 @@ local function ascending(a, b)
   if ta ~= tb then
     return ta < tb
   elseif ta == "table" then
+    -- Unsigned high word, so negative 64-bit keys sort after positive ones: deterministic, not numeric.
     return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2])
   elseif ta == "boolean" then
     return b and not a
@@ -1169,6 +1213,21 @@ function pb.selftest()
   assert_bytes(pb.encode_float(32 * (1 - 2 ^ -25)), "00000042", "float encode carry into odd exponent, larger")
   assert_bytes(pb.encode_float(4 - 2 ^ -24), "00008040", "float encode carry into even exponent")
 
+  -- Subnormals, where there is no implicit leading one and the exponent is pinned.
+  -- Expectations from a C (float) cast; test/float_vectors_test.lua sweeps the band.
+  assert_bytes(pb.encode_float(2 ^ -149), "01000000", "float encode smallest subnormal")
+  assert_bytes(pb.encode_float(2 ^ -126 - 2 ^ -149), "FFFF7F00", "float encode largest subnormal")
+  assert_eq(pb.decode_float(from_hex("01000000"), 1), 2 ^ -149, "float decode smallest subnormal")
+  assert_eq(pb.decode_float(from_hex("FFFF7F00"), 1), 2 ^ -126 - 2 ^ -149, "float decode largest subnormal")
+
+  -- Exact midpoints, which IEEE 754 breaks toward the even mantissa rather than
+  -- away from zero. Half of these go to the wrong neighbour under floor(x + 0.5).
+  assert_bytes(pb.encode_float(2 ^ -150), "00000000", "float encode subnormal tie down to zero")
+  assert_bytes(pb.encode_float(3 * 2 ^ -150), "02000000", "float encode subnormal tie up")
+  assert_bytes(pb.encode_float((2 ^ 24 - 1) * 2 ^ -150), "00008000", "float encode tie carrying to normal")
+  assert_bytes(pb.encode_float(1 + 2 ^ -24), "0000803F", "float encode normal tie down")
+  assert_bytes(pb.encode_float(1 + 3 * 2 ^ -24), "0200803F", "float encode normal tie up")
+
   assert_bytes(pb.encode_float(NEG_ZERO), "00000080", "float encode negative zero")
   assert_bytes(pb.encode_float(0), "00000000", "float encode positive zero")
   local neg_zero_f = pb.decode_float(from_hex("00000080"), 1)
@@ -1196,6 +1255,19 @@ function pb.selftest()
   assert_nan(pb.decode_double(from_hex("FFFFFFFFFFFFFFFF"), 1), "double decode negative NaN")
   assert_eq(pb.decode_double(from_hex("000000000000F07F"), 1), math.huge, "double decode +infinity")
   assert_eq(pb.decode_double(from_hex("000000000000F0FF"), 1), -math.huge, "double decode -infinity")
+
+  -- Subnormals, as in the float section. math_ldexp rather than 2 ^ -1074: LuaJIT 2.0
+  -- returns zero for a power of two below the normal range, and it is in the matrix.
+  local smallest_double = math_ldexp(1.0, -1074)
+  local largest_subnormal_double = math_ldexp(2 ^ 52 - 1, -1074)
+  assert_bytes(pb.encode_double(smallest_double), "0100000000000000", "double encode smallest subnormal")
+  assert_bytes(pb.encode_double(largest_subnormal_double), "FFFFFFFFFFFF0F00", "double encode largest subnormal")
+  assert_eq(pb.decode_double(from_hex("0100000000000000"), 1), smallest_double, "double decode smallest subnormal")
+  assert_eq(
+    pb.decode_double(from_hex("FFFFFFFFFFFF0F00"), 1),
+    largest_subnormal_double,
+    "double decode largest subnormal"
+  )
 
   assert_bytes(pb.encode_double(NEG_ZERO), "0000000000000080", "double encode negative zero")
   assert_eq(1 / pb.decode_double(from_hex("0000000000000080"), 1), -INF, "double decode negative zero")
