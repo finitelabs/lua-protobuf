@@ -244,6 +244,9 @@ between the two paths.
 Encode emits only the unpacked spelling. Re-encoding a decoded message therefore
 does not reproduce the original bytes when the producer packed them, which is
 worth knowing before diffing encoder output against a capture.
+Emission order is canonical: fields ascending by number, map entries ascending
+by key. Two encodes of one message are byte-identical, and match the reference's
+order.
 
 Before v0.6.7 decode had no packed branch and read the whole block as one
 LENGTH_DELIMITED value, so a `protoc`-produced message decoded to a single raw
