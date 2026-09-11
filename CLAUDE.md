@@ -345,9 +345,9 @@ belongs in a driver or in the driver template.
 
 `test/generated/wire_vectors.lua` holds golden bytes produced by the reference
 implementation from `test/test_messages_proto3.proto`, paired with the table the
-decoder should produce. Both sides are derived by walking the reference message,
-so neither is hand-computed — which matters, because three hand-written
-expectations in the FL-16 Part 1 work were themselves wrong.
+decoder should produce. A golden is the reference's own serialization, or an
+assembled payload the reference is asserted to parse to the declared message;
+the expected table is derived by walking that message rather than written by hand.
 
 The goldens are **checked in**, so `make test` needs no Python and runs on a bare
 clone. `make gen-wire-vectors` regenerates them and `make check-wire-vectors`
@@ -379,7 +379,7 @@ and is what surfaced FL-19.
 `test/generated/` is in `typecheck`'s `ignoreDir`. The schema generator emits the
 shared `@class ProtoSchema` and `ProtoFieldSchema` blocks into every file it
 produces, so a second generated schema in the workspace collides with
-`src/protobuf/types.lua` and reports 32 `duplicate-doc-field` warnings.
+`src/protobuf/types.lua` and reports 32 problems, mostly `duplicate-doc-field`.
 
 ## Schema Generation
 

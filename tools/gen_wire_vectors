@@ -516,8 +516,9 @@ def render(cases) -> str:
 -- implementation against test/test_messages_proto3.proto. Regenerate with
 -- `make gen-wire-vectors`; `make check-wire-vectors` fails on drift.
 --
--- `golden` is the reference implementation's own serialization. `expected` is
--- derived by walking that same message, so neither side is hand-computed.
+-- `golden` is the reference implementation's own serialization, or an assembled
+-- payload the reference is asserted to parse to the declared message. `expected`
+-- is derived by walking that message.
 
 local bit64 = require("bitn").bit64
 local I = bit64.new
