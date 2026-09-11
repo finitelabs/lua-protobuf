@@ -327,6 +327,9 @@ comparisons and nothing else decides how it reports or exits.
   reference protobuf implementation.
 - **float-vectors** — `test/float_vectors_test.lua`, differential against the C
   float cast and `struct.pack`.
+- **lpack** — `test/lpack_test.lua`, `pb.selftest()` with `string.pack`/`unpack`
+  replaced by Control4's lpack shape before load, so the vendored bitn has to
+  decline them and pack bytes itself.
 
 Each runs once per math mode it asks for: native `math.frexp`/`math.ldexp`, and
 again with them cleared so the module's own fallbacks are bound.
