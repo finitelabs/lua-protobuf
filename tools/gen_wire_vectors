@@ -444,12 +444,10 @@ def build_cases(cls):
              map_entry_wire("map_string_string", value="only"),
              lambda message: message.map_string_string.__setitem__("", "only"))
 
-    # -- 32-bit varints whose payload exceeds the low word, FL-19 -----------
+    # -- 32-bit varints whose payload exceeds the low word ------------------
     #
-    # Every vector here is red on all six matrix entries before the fix, which
-    # is what makes the suite unable to accept 5.3's signed-64-bit wraparound as
-    # a pass: wraparound reproduces the low word, and the low word is not the
-    # answer for any of these.
+    # Wider than the low word, so 5.3's signed-64-bit wraparound cannot pass
+    # them by accident.
 
     raw_case("int32 from a five-byte payload",
              "a uint32 producer's 0xFFFFFFFF read back through a wire-compatible int32",
@@ -476,11 +474,8 @@ def build_cases(cls):
              varint_field_wire("optional_uint32", 0xFFFFFFFFFFFFFFFF),
              lambda message: setattr(message, "optional_uint32", 4294967295))
 
-    # A smaller high word does not discriminate: zigzag_decode32 is built from
-    # 32-bit primitives that truncate their own input, so it already reads
-    # 0x100000001 as -1. Only a payload wide enough to lose precision as a
-    # double reaches the defect, where the old path handed those primitives
-    # 1.8446744073709552e19 and they returned 0.
+    # The payload has to exceed 2^53: zigzag_decode32's own primitives already
+    # truncate 0x100000001 to -1.
     raw_case("sint32 from a ten-byte payload",
              "the zigzag input is the truncated low word, not a rounded double",
              varint_field_wire("optional_sint32", 0xFFFFFFFFFFFFFFFF),
