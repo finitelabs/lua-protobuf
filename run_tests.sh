@@ -8,10 +8,9 @@
 #   ./run_tests.sh                    # Run all modules
 #   ./run_tests.sh protobuf           # Run only protobuf
 #
-# Every module runs twice, once with the interpreter's native math.frexp and
-# math.ldexp and once with them cleared so the module's own fallbacks are bound.
-#
-# Available modules: protobuf, math-fallback, wire-vectors
+# test/<name>_test.lua is module <name>, underscores as dashes. Each runs with native
+# math.frexp/ldexp and again with them cleared, unless `-- @test-modes` restricts it.
+# `-- @test-name` sets its label.
 
 set -e  # Exit on any error
 
@@ -48,17 +47,6 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # This allows require() to find modules in the src/vendor directories
 lua_path="$script_dir/?.lua;$script_dir/?/init.lua;$script_dir/src/?.lua;$script_dir/src/?/init.lua;$script_dir/vendor/?.lua;$LUA_PATH"
 
-# Modules are discovered, never registered. Any test/<name>_test.lua is a
-# module: its key is <name> with underscores as dashes, so
-# test/wire_vectors_test.lua is `wire-vectors` and gets `make test-wire-vectors`
-# from the Makefile's test-% rule for free. Adding a suite is dropping in a file.
-#
-# Two optional directives in the file head override the defaults:
-#
-#   -- @test-name   Label used in the output. Defaults to the key.
-#   -- @test-modes  Space-separated subset of `native fallback`. Defaults to both.
-#
-# A module's contract is the exit code: 0 passed, anything else failed.
 module_keys=()
 declare -a module_files=()
 
@@ -76,7 +64,6 @@ if [ ${#module_keys[@]} -eq 0 ]; then
     exit 1
 fi
 
-# Reads a `-- @directive value` line from a module's head.
 module_directive() {
     sed -n "s/^-- @$2[[:space:]]\{1,\}//p" "$1" | head -1
 }
@@ -136,11 +123,7 @@ should_run_module() {
     return 1
 }
 
-# math.frexp and math.ldexp are absent on a 5.3 or 5.4 built without
-# LUA_COMPAT_5_3, so the module falls back to its own implementations. Every
-# interpreter in the matrix supplies them natively, which left the fallback
-# unreached by any test. Clearing the globals before require() binds the
-# fallbacks instead, so each module runs once down each path.
+# No matrix interpreter lacks the natives, so without this nothing runs the codecs through the fallbacks.
 math_modes=("native" "fallback")
 
 math_preamble() {
@@ -149,7 +132,6 @@ math_preamble() {
     fi
 }
 
-# Runs one discovered module, once per math mode it asks for.
 run_module() {
     local module_key="$1"
     local test_file

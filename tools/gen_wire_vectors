@@ -2,12 +2,7 @@
 """
 Generate wire-format golden vectors from the reference protobuf implementation.
 
-Every expectation is derived by walking the reference message, never hand-written.
-Three of the first-pass float expectations written by hand for FL-16 Part 1 were
-themselves wrong, which is the argument for an oracle rather than literals.
-
-The corpus is enumerated, not sampled: no RNG and no seed, so regenerating on a
-different host reproduces the file byte for byte.
+The corpus is enumerated, not sampled, so the output is byte-identical on every host.
 """
 import argparse
 import os
@@ -57,12 +52,9 @@ def load_message_class(proto_path: str):
 
 def lua_string(raw: bytes) -> str:
     """
-    Render bytes as a Lua string literal using three-digit decimal escapes.
+    Render bytes as a Lua string literal with fixed three-digit decimal escapes.
 
-    The width is load-bearing. Lua's `\\ddd` consumes up to three digits, so a
-    variable-width `\\10` followed by a literal "0" byte reads back as `\\100`:
-    a different string, silently, with no parse error. Wire data puts digits
-    after small tag bytes constantly.
+    Never variable-width: `\\10` followed by a "0" byte reads back as `\\100`.
     """
     out = ['"']
     for byte in raw:
@@ -88,7 +80,6 @@ def lua_number(value: float) -> str:
     if value == float("-inf"):
         return "-math.huge"
     if value == 0.0:
-        # Distinguishes -0.0, which the codec is documented to preserve.
         return "-0.0" if str(value)[0] == "-" else "0.0"
     return "%.17g" % value
 
@@ -118,9 +109,7 @@ def message_to_lua(message, indent: int) -> str:
     """
     Render the table the decoder should produce for `message`.
 
-    Driven by ListFields, which yields exactly the fields the reference
-    implementation put on the wire. A proto3 scalar holding its zero value is not
-    serialized, so it is absent here too, matching a decode that leaves it nil.
+    Uses ListFields, so proto3 zero values are absent, as a decode leaves them nil.
     """
     pad = "  " * indent
     inner = "  " * (indent + 1)
@@ -164,12 +153,9 @@ def message_to_lua(message, indent: int) -> str:
 
 def build_cases(cls):
     """
-    Return the enumerated corpus as (name, note, message) triples.
+    Return the enumerated corpus.
 
-    Float values are chosen to be exactly representable so that narrowing and
-    tie-rounding play no part here. Subnormals and exact ties belong to FL-16
-    Part 1 and to test/math_fallback_test.lua; including them would make this
-    suite red for a defect it is not the one fixing.
+    Floats are exactly representable: rounding belongs to the codec tests, not here.
     """
     cases = []
 
@@ -180,14 +166,8 @@ def build_cases(cls):
 
     def map_entry_wire(field_name, **fields):
         """
-        Build a map entry that omits a side, using the reference implementation's
-        own encoder primitives for the tag and length prefix.
-
-        The reference's serializer always writes both sides of a map entry even
-        when they hold the zero value, so its output cannot reach the decoder's
-        `default_value` branch for a dropped key or value. Another producer may
-        legitimately drop either, and CLAUDE.md documents that decode applies the
-        defaults, so the branch needs a vector that the reference will not emit.
+        Build a map entry with a side omitted. The reference serializer always
+        writes both sides, so it cannot produce the case decode defaults cover.
         """
         field = cls.DESCRIPTOR.fields_by_name[field_name]
         entry_cls = message_factory.GetMessageClass(field.message_type)
@@ -203,11 +183,7 @@ def build_cases(cls):
 
     def raw_case(name, note, golden, populate):
         """
-        A vector whose bytes are assembled rather than serialized whole.
-
-        `populate` describes the message those bytes mean. The generator asserts
-        the reference parses the bytes to exactly that, so the expectation stays
-        oracle-derived rather than asserted by construction.
+        A vector from assembled bytes, asserted to parse to `populate`'s message.
         """
         message = cls()
         populate(message)
@@ -266,9 +242,7 @@ def build_cases(cls):
 
     case("negative scalars", "sign extension and zigzag", negative_scalars)
 
-    # Isolated from the vectors above so the FL-18 gap entries suppress only
-    # this defect. A gap listed against a shared vector would also mask any
-    # future regression in the other fields that vector carries.
+    # Kept separate so its known-gap entries cannot mask regressions in other fields.
     def negative_sfixed32(message):
         message.optional_sfixed32 = -1
 

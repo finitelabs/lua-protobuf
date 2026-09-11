@@ -1,39 +1,15 @@
 -- @test-name Wire vectors
 --
--- Both math modes: the float and double fields in the corpus run through
--- whichever frexp/ldexp the module bound, so the fallback path gets driven by
--- the whole wire suite rather than by the math test alone.
+-- Differential wire-format coverage against test/generated/wire_vectors.lua.
 --
--- Differential wire-format coverage against the reference protobuf
--- implementation, driven by test/generated/wire_vectors.lua.
---
--- Targets the four field-level defects no suite caught: DRV-104 (nested types
--- dropped by the generator), DRV-105 (maps unimplemented), DRV-106 (a
--- length-delimited field silently truncated) and DRV-107 (packed repeated
--- scalars not unpacked). Every one was found in the field or in review.
---
--- Two directions, asserted differently:
---
---   reference -> Lua   the golden bytes decode to the expected table. Input is
---                      byte-exact, so this is strict.
---   Lua -> reference   re-decoding Lua's own encoding reproduces the expected
---                      table. This is semantic, not bytewise, because the
---                      encoder never packs: comparing its output to the
---                      reference bytes would fail on correct code for every
---                      repeated scalar. The decoder is a fair judge here only
---                      because the first direction pins it to the oracle
---                      independently. `make check-wire-vectors` closes the
---                      remaining gap by parsing Lua's bytes in Python.
---
--- Float values in the corpus are exactly representable. Subnormals and exact
--- ties belong to FL-16 Part 1 and to test/math_fallback_test.lua; asserting
--- them here would make this suite red for a defect it is not the one fixing.
+-- Decode is compared strictly. Encode is compared by re-decoding, never bytewise:
+-- this encoder never packs, so its bytes differ from the reference's for repeated
+-- scalars even when correct.
 
 local pb = require("protobuf")
 local bit64 = require("bitn").bit64
 
--- Resolved from this file's own path so the suite runs both as
--- `lua test/wire_vectors_test.lua` and as the absolute dofile run_tests.sh issues.
+-- Relative to this file, not the working directory.
 local here = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 
 local schema = dofile(here .. "generated/test_messages_proto3_schema.lua")
@@ -71,10 +47,9 @@ local function describe(value)
   return tostring(value)
 end
 
--- Forward declaration: a message field compares by recursing back into this.
+-- Forward-declared: compare_value recurses into it.
 local compare_message
 
---- Compares one field value, dispatching on the field's declared type.
 --- @return boolean equal
 --- @return string? detail
 local function compare_value(field, got, want, path)
@@ -105,12 +80,8 @@ local function compare_value(field, got, want, path)
   return true
 end
 
---- Compares two map values by matching keys pairwise.
----
---- A `map<int64, ...>` decodes its keys to Int64 tables, so the destination is
---- keyed by table identity and a key cannot be looked up by value. Every map is
---- compared this way rather than only the 64-bit ones, so the comparison does
---- not depend on which key types happen to be lookupable.
+--- Matches keys pairwise: int64 map keys decode to Int64 tables, which cannot be
+--- looked up by value.
 local function compare_map(field, got, want, path)
   local entry = schema.Message[field.subschema]
   local key_field, value_field = entry.fields[1], entry.fields[2]
@@ -155,11 +126,7 @@ local function compare_map(field, got, want, path)
   return true
 end
 
---- Compares a decoded message against the expected table, driven by the schema.
----
---- Iterating the schema rather than either table is what makes a missing field
---- and an unexpected one both visible: a field absent from `want` but present
---- in `got` is a mismatch in the same way as the reverse.
+--- Iterates the schema, not either table, so missing and unexpected fields both fail.
 function compare_message(messageSchema, got, want, path)
   for _, field in pairs(messageSchema.fields) do
     local got_value = got[field.name]
@@ -167,7 +134,7 @@ function compare_message(messageSchema, got, want, path)
     local where = path .. "." .. field.name
 
     if got_value == nil and want_value == nil then -- luacheck: ignore
-      -- Absent on both sides, which is what a proto3 zero value looks like.
+      -- Absent on both sides: a proto3 zero value.
     elseif want_value == nil then
       return false, where .. ": unexpected value " .. describe(got_value)
     elseif got_value == nil then
@@ -203,7 +170,6 @@ function compare_message(messageSchema, got, want, path)
   return true
 end
 
---- Runs one assertion, routing it through the known-gap lists.
 local function assert_case(name, direction, ok, detail)
   report:count()
   local key = name .. " | " .. direction

@@ -1,6 +1,4 @@
--- Emits each vector's golden bytes as Lua actually reads them, so
--- tools/check_wire_vectors can compare them to what Python wrote. The escape
--- encoding in the generated file is the thing under test here.
+-- Prints each vector's golden bytes as Lua reads them, for tools/check_wire_vectors.
 
 local repo = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 repo = repo .. "../"

@@ -1,23 +1,9 @@
 #!/usr/bin/env python3
 """
-Close the two gaps the Lua suite cannot close by itself.
+Verify the wire vectors against the reference implementation.
 
-1. Readback. The goldens reach Lua as string literals with decimal escapes, so
-   the bytes the suite asserts against are only the reference implementation's
-   bytes if that encoding survives. A variable-width escape silently produces a
-   different string with no parse error, so this compares what Lua actually
-   reads against what Python actually wrote.
-
-2. The Lua -> reference direction, against the reference rather than against
-   this library's own decoder. The Lua suite re-decodes the encoder's output
-   with a decoder the goldens pin, which is sound but circular in principle.
-   Here the bytes are parsed by the reference implementation and compared as
-   messages, so packing, field order and map order are all normalised away.
-   That is the semantic comparison a byte assertion cannot be: this encoder
-   never packs, so its output will not match `protoc`'s for a repeated scalar
-   even when it is correct.
-
-Needs Python, which is why this is not part of `make check`.
+1. Readback: the goldens as Lua reads them equal the bytes Python wrote.
+2. Encode: this library's encodings, parsed by the reference, equal the expected messages.
 """
 import os
 import subprocess
@@ -85,8 +71,7 @@ def main() -> int:
             gaps += 1
             continue
         if status == "VERSION":
-            # Outcome depends on the interpreter's number model, so it is
-            # reported rather than asserted. See test/known_gaps.lua.
+            # Reported, not asserted. See test/known_gaps.lua.
             unstable += 1
             continue
         if status == "ERROR":

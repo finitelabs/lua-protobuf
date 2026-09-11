@@ -183,12 +183,7 @@ check-schema:
 	@.venv/bin/python3 tools/gen_lua_proto_schema build/empty.schema.lua empty.proto
 	@$(LUA_BINARY) tools/check_schema_refs.lua build/empty.schema.lua
 
-# Regenerate the checked-in wire-format schema and golden vectors.
-#
-# Deliberately not part of `check`. Python is genuinely required here, unlike the
-# rest of the test suite, so gating `check` on it would re-create the fresh-clone
-# and `make clean` trap that check-types already has. The goldens are checked in
-# so `make test` runs on a bare clone with no Python at all.
+# Regenerate the checked-in wire-format schema and golden vectors
 .PHONY: gen-wire-vectors
 gen-wire-vectors:
 	@if [ ! -f .venv/bin/python3 ]; then \
@@ -200,9 +195,7 @@ gen-wire-vectors:
 	@.venv/bin/python3 tools/gen_wire_vectors \
 		test/generated/wire_vectors.lua test/test_messages_proto3.proto
 
-# Verify the checked-in vectors against the reference implementation: no drift,
-# the goldens read back as the bytes Python wrote, and this library's own
-# encodings parse to an equal message.
+# Check wire vectors for drift and against the reference implementation. Needs the venv, so not in `check`.
 .PHONY: check-wire-vectors
 check-wire-vectors:
 	@if [ ! -f .venv/bin/python3 ]; then \

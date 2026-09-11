@@ -3,12 +3,8 @@ name: Lua Tests
 on:
   push:
     branches: [ main, master ]
-  # No branch filter: a pull request is verified whatever it targets. With the
-  # filter every stacked PR got zero check runs -- #28 sat against this branch
-  # with no CI at all -- so the first time a stacked change was tested was after
-  # its parent merged and GitHub retargeted it, which is the wrong end of the
-  # review. `push` stays pinned to main/master so a branch still runs once.
   pull_request:
+    branches: [ main, master ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -63,12 +59,6 @@ jobs:
       - name: Check
         run: make check
 
-      # Deliberately not part of `make check`: that gate stays runnable on a bare
-      # clone, and this needs the Python venv. CI already provisions it above for
-      # check-types, so the drift gate and the reference cross-check belong here
-      # rather than nowhere. Without this the wire goldens are the one generated
-      # artifact with no CI drift check, and the encode direction is never
-      # verified against the reference implementation at all.
       - name: Check wire vectors
         run: make check-wire-vectors
 

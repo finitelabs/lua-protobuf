@@ -306,12 +306,12 @@ The `vendor/bitn.lua` file is a vendored copy of the [lua-bitn](https://github.c
 
 ### Adding a suite
 
-Drop a `test/<name>_test.lua` file in. That is the whole procedure — modules are
-discovered, never registered, so nothing else has to be edited.
+Drop a `test/<name>_test.lua` file in. Modules are discovered, so nothing else
+needs editing.
 
 The key is `<name>` with underscores as dashes, so `test/wire_vectors_test.lua`
 is `wire-vectors`, runs under `./run_tests.sh wire-vectors`, and gets
-`make test-wire-vectors` from the Makefile's `test-%` rule for free.
+`make test-wire-vectors` from the Makefile's `test-%` rule.
 
 **A module's contract is its exit code**: 0 passed, anything else failed. Two
 optional directives in the file head override the defaults:
@@ -323,9 +323,7 @@ optional directives in the file head override the defaults:
 
 `test/testlib.lua` is the shared harness: `new(name)` returns a reporter with
 `count`, `record`, `note`, `abort` and `finish`, so a module writes its
-comparisons and nothing else decides how it reports or exits. Use it rather than
-hand-rolling a failure list — the two suites that predated it had drifted to
-different failure caps and three different ways to signal a failure.
+comparisons and nothing else decides how it reports or exits.
 
 ### The modules
 
@@ -367,11 +365,7 @@ fails on drift. Neither is part of `make check`: Python is genuinely required
 here, and gating `check` on it would re-create the fresh-clone and `make clean`
 trap that `check-types` already has.
 
-`check-wire-vectors` does run in CI, as its own step in the `check` job, which
-already provisions the venv for `check-types`. Keeping it out of `make check` is
-about a bare clone, not about CI — left out of both, the wire goldens would be
-the one generated artifact with no drift gate, and the encode direction would
-never be checked against the reference implementation at all.
+`check-wire-vectors` runs in CI as its own step in the `check` job.
 
 The two directions are asserted differently, and the asymmetry is deliberate:
 
@@ -461,14 +455,9 @@ Version is automatically injected from git tags during release.
 
 ## CI/CD
 
-- **build.yml**: pushes to `main`/`master`, and **every** pull request whatever
-  it targets. The `pull_request` trigger deliberately carries no `branches`
-  filter: with one, a stacked PR against another agent branch got zero check
-  runs and was first tested only after its parent merged and GitHub retargeted
-  it.
+- **build.yml**: Runs on push/PR to `main` or `master`
   - `check` job — `make check`: format-check, luacheck, check-types, check-schema,
-    and typecheck against lua-language-server 3.19.0, plus `check-wire-vectors`
-    as its own step (see Testing for why it is not inside `make check`)
+    and typecheck against lua-language-server 3.19.0, then `make check-wire-vectors`
   - `test` job — `make test-all` across Lua 5.1-5.4, LuaJIT 2.0/2.1
   - `build` job — single-file distributions
   - The `luajit-2.1` matrix entry is silently built as **`luajit-openresty`**:

@@ -1,15 +1,7 @@
-// Vendored from protocolbuffers/protobuf v29.3,
-// src/google/protobuf/test_messages_proto3.proto, then trimmed.
+// Vendored from protocolbuffers/protobuf v29.3, src/google/protobuf/test_messages_proto3.proto.
 //
-// Removed: the six google/protobuf imports and every field typed from them
-// (201-219, 301-324, and the NullValue arm of oneof_field at 120). The schema
-// generator drops any descriptor whose package is google.protobuf, so those
-// fields generate a subschema reference that resolves to no message and
-// check-schema fails on all 31 of them. Tracked as FL-17.
-//
-// Field numbers of everything retained are upstream's, so wire captures stay
-// comparable. Regenerate by re-running the trim against a newer upstream tag
-// rather than editing this copy.
+// Fields typed from the google/protobuf imports are removed until FL-17 (201-219,
+// 301-324, and oneof_field's NullValue arm at 120). Retained field numbers are upstream's.
 
 syntax = "proto3";
 

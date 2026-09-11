@@ -1,9 +1,5 @@
--- Emits this library's own encoding of every wire vector, for the reference
--- implementation to parse back in tools/check_wire_vectors.
---
--- One tab-separated record per vector: "<name>\t<status>\t<payload>", where
--- status is OK with the encoding as hex, GAP or VERSION with the ticket, or
--- ERROR with the message the encoder raised.
+-- Prints this library's encoding of each vector for tools/check_wire_vectors, one
+-- record per line: "<name>\t<OK|GAP|VERSION|ERROR>\t<hex|ticket|error message>".
 
 local repo = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 repo = repo .. "../"
