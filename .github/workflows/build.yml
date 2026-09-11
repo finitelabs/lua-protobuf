@@ -59,6 +59,9 @@ jobs:
       - name: Check
         run: make check
 
+      - name: Check wire vectors
+        run: make check-wire-vectors
+
   test:
     needs: check
     runs-on: ubuntu-latest

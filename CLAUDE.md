@@ -15,7 +15,13 @@ lua-protobuf/
 │   └── requirements.txt      # Python dependencies for schema generator
 ├── test/
 │   ├── nested.proto  # Fixture: nested types, packages, services (check-schema)
-│   └── maps.proto    # Fixture: map fields and their synthesized entries (check-schema)
+│   ├── maps.proto    # Fixture: map fields and their synthesized entries (check-schema)
+│   ├── test_messages_proto3.proto  # Trimmed upstream conformance message
+│   ├── testlib.lua                 # Shared harness for every *_test.lua module
+│   ├── protobuf_test.lua           # Wraps the embedded selftest()
+│   ├── math_fallback_test.lua      # frexp/ldexp fallbacks vs native
+│   ├── wire_vectors_test.lua       # Differential wire-format suite
+│   └── generated/    # Checked-in generated schema and goldens (not typechecked)
 ├── .github/workflows/
 │   └── build.yml     # CI: check, test matrix, build
 ├── empty.proto       # Empty proto for generating base types
@@ -165,10 +171,6 @@ This is the section to read before assuming a `.proto` will round-trip:
   instead of `1.40e-45`; encode clamps the exponent to 0 with a zero mantissa, so
   any subnormal flushes to zero. NaN, the infinities and negative zero are
   handled. Tracked as FL-16.
-- **The `frexp` fallback is not exact.** `math_frexp` falls back to a `math.log`
-  computation when `math.frexp` is absent, and that fallback can return a
-  mantissa of exactly 1.0, which encodes some normal doubles a factor of two too
-  small. Every CI target has a native `math.frexp`, so nothing exercises it.
 
 ### Schema Structure
 
@@ -278,15 +280,106 @@ SINT64, FIXED64 and SFIXED64 come back as Int64 **tables**, while INT32, UINT32,
 ENUM, BOOL and FIXED32 come back as plain numbers. `pb.decode_varint` silently
 truncates beyond 53 bits.
 
+The 32-bit varint types do not go through `pb.decode_varint`. INT32, UINT32,
+ENUM and SINT32 read the full `{high, low}` pair and then discard the high word,
+because protobuf truncates a varint to the field's declared width rather than
+widening it: `int32` and `uint32` are wire compatible, so the five-byte payload
+`0xFFFFFFFF` is `4294967295` read as one and `-1` read as the other. Going
+through a plain number instead would make the answer depend on the interpreter's
+number model, which is what FL-19 fixed.
+
 ### Vendor Dependencies
 
 The `vendor/bitn.lua` file is a vendored copy of the [lua-bitn](https://github.com/finitelabs/lua-bitn) library providing portable bitwise operations. Import as `require("bitn")` (not `vendor.bitn`).
 
 ## Testing
 
-Tests are embedded in `src/protobuf/init.lua` as a `selftest()` function. The test runner invokes this function and reports results.
+### Adding a suite
 
-Run with: `./run_tests.sh` or `make test`
+Drop a `test/<name>_test.lua` file in. Modules are discovered, so nothing else
+needs editing.
+
+The key is `<name>` with underscores as dashes, so `test/wire_vectors_test.lua`
+is `wire-vectors`, runs under `./run_tests.sh wire-vectors`, and gets
+`make test-wire-vectors` from the Makefile's `test-%` rule.
+
+**A module's contract is its exit code**: 0 passed, anything else failed. Two
+optional directives in the file head override the defaults:
+
+```lua
+-- @test-name Wire vectors      -- label in the output, defaults to the key
+-- @test-modes native           -- subset of `native fallback`, defaults to both
+```
+
+`test/testlib.lua` is the shared harness: `new(name)` returns a reporter with
+`count`, `record`, `note`, `abort` and `finish`, so a module writes its
+comparisons and nothing else decides how it reports or exits.
+
+### The modules
+
+- **protobuf** — `test/protobuf_test.lua`, a wrapper around the embedded
+  `selftest()` in `src/protobuf/init.lua`.
+- **math-fallback** — `test/math_fallback_test.lua`, differential against the
+  interpreter's native `frexp`/`ldexp`. Native mode only; it clears the globals
+  itself to reach the fallbacks and needs the natives surviving as the oracle.
+- **wire-vectors** — `test/wire_vectors_test.lua`, differential against the
+  reference protobuf implementation.
+
+Each runs once per math mode it asks for: native `math.frexp`/`math.ldexp`, and
+again with them cleared so the module's own fallbacks are bound.
+
+### Where a test belongs
+
+Split by **kind**, not by location:
+
+- **`selftest()` in `src/protobuf/init.lua`** for small, self-contained
+  assertions. It ships inside the amalgamated module on purpose, so it can be run
+  on a controller against the real LuaJIT from a driver. That is coverage no CI
+  run reproduces, and it is why the suite stays in the shipped artifact.
+- **`test/`** for anything generated, oracle-backed or large. These never ship.
+
+A vendored library's tests live in its own repo either way. Nothing test-shaped
+belongs in a driver or in the driver template.
+
+### Wire vectors
+
+`test/generated/wire_vectors.lua` holds golden bytes produced by the reference
+implementation from `test/test_messages_proto3.proto`, paired with the table the
+decoder should produce. A golden is the reference's own serialization, or an
+assembled payload the reference is asserted to parse to the declared message;
+the expected table is derived by walking that message rather than written by hand.
+
+The goldens are **checked in**, so `make test` needs no Python and runs on a bare
+clone. `make gen-wire-vectors` regenerates them and `make check-wire-vectors`
+fails on drift. Neither is part of `make check`: Python is genuinely required
+here, and gating `check` on it would re-create the fresh-clone and `make clean`
+trap that `check-types` already has.
+
+`check-wire-vectors` runs in CI as its own step in the `check` job.
+
+The two directions are asserted differently, and the asymmetry is deliberate:
+
+- **reference → Lua** is strict. The input is byte-exact.
+- **Lua → reference** is semantic, never bytewise. This encoder never packs, so
+  its output will not match `protoc`'s for any repeated scalar even when it is
+  correct. The Lua suite re-decodes the encoder's own output; `make
+  check-wire-vectors` additionally parses those bytes with the reference
+  implementation and compares messages, which normalises packing, field order
+  and map order away.
+
+Every vector must agree with the reference in both directions. There is no list
+of expected failures: a defect the vectors find is fixed in the change that adds
+the vector.
+
+Run the suite under more than one interpreter before trusting it. `make test`
+uses whatever `lua` resolves to, which on a current Homebrew is 5.5 and is not a
+matrix entry; `LUA_BINARY=luajit ./run_tests.sh` is the cheapest second opinion
+and is what surfaced FL-19.
+
+`test/generated/` is in `typecheck`'s `ignoreDir`. The schema generator emits the
+shared `@class ProtoSchema` and `ProtoFieldSchema` blocks into every file it
+produces, so a second generated schema in the workspace collides with
+`src/protobuf/types.lua` and reports 32 problems, mostly `duplicate-doc-field`.
 
 ## Schema Generation
 
@@ -321,6 +414,14 @@ and then ignored unless the first imports them. The generator also wraps
 generation in a bare `except` that prints the error and still exits 0, so check
 the output file rather than the exit status.
 
+**Well-known types do not survive.** `--include_imports` is passed and protoc does
+deliver them, but `parse_descriptor_set` skips any file whose package is
+`google.protobuf`, in all four of its loops. So a `.proto` importing
+`google/protobuf/timestamp.proto` generates a field whose `subschema` names
+`google.protobuf.Timestamp` and no message to resolve it against, and
+`check-schema` fails. `test/test_messages_proto3.proto` is vendored with those
+fields trimmed for that reason. Tracked as FL-17.
+
 ## Building
 
 The build process uses `amalg` to create single-file distributions:
@@ -338,7 +439,7 @@ Version is automatically injected from git tags during release.
 
 - **build.yml**: Runs on push/PR to `main` or `master`
   - `check` job — `make check`: format-check, luacheck, check-types, check-schema,
-    and typecheck against lua-language-server 3.19.0
+    and typecheck against lua-language-server 3.19.0, then `make check-wire-vectors`
   - `test` job — `make test-all` across Lua 5.1-5.4, LuaJIT 2.0/2.1
   - `build` job — single-file distributions
   - The `luajit-2.1` matrix entry is silently built as **`luajit-openresty`**:

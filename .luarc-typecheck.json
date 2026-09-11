@@ -21,6 +21,7 @@
       "build",
       "dist",
       "node_modules",
+      "test/generated",
       "vendor"
     ],
     "maxPreload": 5000,

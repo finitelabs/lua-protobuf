@@ -9,17 +9,21 @@ local bit32 = bitn.bit32
 local bit64 = bitn.bit64
 
 -- Cache methods as locals for faster access
+local bit32_le_bytes_to_u32 = bit32.le_bytes_to_u32
 local bit32_raw_arshift = bit32.raw_arshift
 local bit32_raw_band = bit32.raw_band
 local bit32_raw_bor = bit32.raw_bor
 local bit32_raw_bxor = bit32.raw_bxor
 local bit32_raw_lshift = bit32.raw_lshift
 local bit32_raw_rshift = bit32.raw_rshift
+local bit32_to_signed = bit32.to_signed
 local bit32_to_unsigned = bit32.to_unsigned
+local bit32_u32_to_le_bytes = bit32.u32_to_le_bytes
 local bit64_eq = bit64.eq
 local bit64_from_number = bit64.from_number
 local bit64_is_int64 = bit64.is_int64
 local bit64_is_zero = bit64.is_zero
+local bit64_le_bytes_to_u64 = bit64.le_bytes_to_u64
 local bit64_new = bit64.new
 local bit64_raw_arshift = bit64.raw_arshift
 local bit64_raw_bor = bit64.raw_bor
@@ -28,6 +32,7 @@ local bit64_raw_lshift = bit64.raw_lshift
 local bit64_raw_rshift = bit64.raw_rshift
 local bit64_to_hex = bit64.to_hex
 local bit64_to_number = bit64.to_number
+local bit64_u64_to_le_bytes = bit64.u64_to_le_bytes
 
 -- Lua 5.3+ removed math.frexp and math.ldexp; provide polyfills
 local math_frexp = math.frexp
@@ -128,14 +133,14 @@ function pb.encode_varint(value)
 
     repeat
       -- Extract low 7 bits
-      local byte = v[2] % 128
+      local byte = bit32_raw_band(v[2], 0x7F)
 
       -- Right shift by 7 bits using bit64
       v = bit64_raw_rshift(v, 7)
 
       -- Set continue bit if more bytes remain
       if v[1] ~= 0 or v[2] ~= 0 then
-        byte = byte + 0x80
+        byte = bit32_raw_bor(byte, 0x80)
       end
       table.insert(bytes, string.char(byte))
     until v[1] == 0 and v[2] == 0
@@ -159,16 +164,14 @@ function pb.encode_varint(value)
   end
 
   -- For large values (> 32 bits), convert to {high, low} and use bit64
-  local low_32 = value % 0x100000000
-  local high_32 = math.floor(value / 0x100000000)
-  local v = bit64_new(high_32, low_32)
+  local v = bit64_from_number(value)
   local bytes = {}
 
   repeat
-    local byte = v[2] % 128
+    local byte = bit32_raw_band(v[2], 0x7F)
     v = bit64_raw_rshift(v, 7)
     if v[1] ~= 0 or v[2] ~= 0 then
-      byte = byte + 0x80
+      byte = bit32_raw_bor(byte, 0x80)
     end
     table.insert(bytes, string.char(byte))
   until v[1] == 0 and v[2] == 0
@@ -222,11 +225,10 @@ end
 --- @param value integer The 32-bit integer to encode.
 --- @return string bytes The encoded 4-byte sequence.
 function pb.encode_fixed32(value)
-  local b1 = value % 256
-  local b2 = math.floor(value / 256) % 256
-  local b3 = math.floor(value / 65536) % 256
-  local b4 = math.floor(value / 16777216)
-  return string.char(b1, b2, b3, b4)
+  if value < -0x80000000 or value > 0xFFFFFFFF then
+    error("fixed32 value out of range: " .. tostring(value), 2)
+  end
+  return bit32_u32_to_le_bytes(value)
 end
 
 --- Decodes a fixed-length 4-byte sequence into a 32-bit integer.
@@ -235,34 +237,14 @@ end
 --- @return integer value The decoded 32-bit integer value.
 --- @return integer new_pos The new position in the buffer after decoding.
 function pb.decode_fixed32(buffer, pos)
-  local b1, b2, b3, b4 = string.byte(buffer, pos, pos + 3)
-  local value = b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
-  --- @cast value integer
-  return value, pos + 4
+  return bit32_le_bytes_to_u32(buffer, pos), pos + 4
 end
 
 --- Encodes a 64-bit integer into a fixed-length 8-byte sequence.
 --- @param value Int64HighLow|number The 64-bit integer as {high, low} or number.
 --- @return string bytes The encoded 8-byte sequence.
 function pb.encode_fixed64(value)
-  local high, low
-  if bit64_is_int64(value) then
-    --- @cast value Int64HighLow
-    high, low = value[1], value[2]
-  else
-    --- @cast value -Int64HighLow
-    low = math.floor(value % 0x100000000)
-    high = math.floor(value / 0x100000000)
-  end
-  local b1 = low % 256
-  local b2 = math.floor(low / 256) % 256
-  local b3 = math.floor(low / 65536) % 256
-  local b4 = math.floor(low / 16777216) % 256
-  local b5 = high % 256
-  local b6 = math.floor(high / 256) % 256
-  local b7 = math.floor(high / 65536) % 256
-  local b8 = math.floor(high / 16777216) % 256
-  return string.char(b1, b2, b3, b4, b5, b6, b7, b8)
+  return bit64_u64_to_le_bytes(bit64_from_number(value))
 end
 
 --- Decodes a fixed-length 8-byte sequence into a 64-bit integer.
@@ -271,11 +253,7 @@ end
 --- @return Int64HighLow value The decoded 64-bit value as {high_32, low_32}.
 --- @return integer new_pos The new position in the buffer after decoding.
 function pb.decode_fixed64(buffer, pos)
-  --- @type integer, integer, integer, integer, integer, integer, integer, integer
-  local b1, b2, b3, b4, b5, b6, b7, b8 = string.byte(buffer, pos, pos + 7)
-  local low = b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
-  local high = b5 + b6 * 256 + b7 * 65536 + b8 * 16777216
-  return bit64_new(high, low), pos + 8
+  return bit64_le_bytes_to_u64(buffer, pos), pos + 8
 end
 
 --- Encodes a floating-point number into a 4-byte IEEE 754 single-precision format.
@@ -330,12 +308,8 @@ function pb.encode_float(value)
     e = e + 1
   end
 
-  local b1 = m % 256
-  local b2 = math.floor(m / 256) % 256
-  local b3 = bit32_raw_bor(math.floor(m / 65536), bit32_raw_lshift(e % 2, 7))
-  local b4 = bit32_raw_bor(bit32_raw_rshift(e, 1), bit32_raw_lshift(sign, 7))
-
-  return string.char(b1, b2, b3, b4)
+  local word = bit32_raw_bor(bit32_raw_lshift(sign, 31), bit32_raw_lshift(e, 23))
+  return bit32_u32_to_le_bytes(bit32_raw_bor(word, m))
 end
 
 --- Decodes a 4-byte IEEE 754 single-precision format into a floating-point number.
@@ -344,11 +318,11 @@ end
 --- @return number value The decoded floating-point value.
 --- @return integer new_pos The new position in the buffer after decoding.
 function pb.decode_float(buffer, pos)
-  local b1, b2, b3, b4 = string.byte(buffer, pos, pos + 3)
+  local word = bit32_le_bytes_to_u32(buffer, pos)
 
-  local sign = bit32_raw_rshift(b4, 7)
-  local e = bit32_raw_lshift(bit32_raw_band(b4, 0x7F), 1) + bit32_raw_rshift(b3, 7)
-  local m = bit32_raw_band(b3, 0x7F) * 65536 + b2 * 256 + b1
+  local sign = bit32_raw_rshift(word, 31)
+  local e = bit32_raw_band(bit32_raw_rshift(word, 23), 0xFF)
+  local m = bit32_raw_band(word, 0x7FFFFF)
 
   if e == 0 and m == 0 then
     return sign == 1 and NEG_ZERO or 0, pos + 4
@@ -411,21 +385,10 @@ function pb.encode_double(value)
     mantissa = 0
   end
 
-  -- Mantissa is 52 bits, split across bytes
-  local m = mantissa * 0x10000000000000 -- 2^52
-  local m_low = math.floor(m % 0x100000000)
-  local m_high = math.floor(m / 0x100000000) % 0x100000 -- 20 bits
-
-  local b1 = m_low % 256
-  local b2 = math.floor(m_low / 256) % 256
-  local b3 = math.floor(m_low / 65536) % 256
-  local b4 = math.floor(m_low / 16777216) % 256
-  local b5 = m_high % 256
-  local b6 = math.floor(m_high / 256) % 256
-  local b7 = bit32_raw_bor(math.floor(m_high / 65536), bit32_raw_lshift(e % 16, 4))
-  local b8 = bit32_raw_bor(bit32_raw_rshift(e, 4), bit32_raw_lshift(sign, 7))
-
-  return string.char(b1, b2, b3, b4, b5, b6, b7, b8)
+  local m = bit64_from_number(mantissa * 0x10000000000000) -- 52 bits: 20 in high, 32 in low
+  local high = bit32_raw_bor(bit32_raw_lshift(sign, 31), bit32_raw_lshift(e, 20))
+  m[1] = bit32_raw_bor(high, bit32_raw_band(m[1], 0xFFFFF))
+  return bit64_u64_to_le_bytes(m)
 end
 
 --- Decodes an 8-byte IEEE 754 double-precision format into a floating-point number.
@@ -434,13 +397,13 @@ end
 --- @return number value The decoded double-precision floating-point value.
 --- @return integer new_pos The new position in the buffer after decoding.
 function pb.decode_double(buffer, pos)
-  local b1, b2, b3, b4, b5, b6, b7, b8 = string.byte(buffer, pos, pos + 7)
+  local word = bit64_le_bytes_to_u64(buffer, pos)
+  local high = word[1]
 
-  local sign = bit32_raw_rshift(b8, 7)
-  local e = bit32_raw_lshift(bit32_raw_band(b8, 0x7F), 4) + bit32_raw_rshift(b7, 4)
-  local m_high = bit32_raw_band(b7, 0x0F) * 65536 + b6 * 256 + b5
-  local m_low = b4 * 16777216 + b3 * 65536 + b2 * 256 + b1
-  local m = m_high * 0x100000000 + m_low
+  local sign = bit32_raw_rshift(high, 31)
+  local e = bit32_raw_band(bit32_raw_rshift(high, 20), 0x7FF)
+  word[1] = bit32_raw_band(high, 0xFFFFF)
+  local m = bit64_to_number(word)
 
   if e == 0 and m == 0 then
     return sign == 1 and NEG_ZERO or 0, pos + 8
@@ -480,12 +443,7 @@ end
 --- @param value integer The zigzag-encoded value.
 --- @return integer decoded The signed integer.
 function pb.zigzag_decode32(value)
-  local result = bit32_raw_bxor(bit32_raw_rshift(value, 1), -bit32_raw_band(value, 1))
-  -- Convert unsigned to signed if high bit is set
-  if result >= 0x80000000 then
-    result = result - 0x100000000
-  end
-  return result
+  return bit32_to_signed(bit32_raw_bxor(bit32_raw_rshift(value, 1), -bit32_raw_band(value, 1)))
 end
 
 --- Encodes a signed 64-bit integer using zigzag encoding.
@@ -553,14 +511,20 @@ local function decode_scalar(protoSchema, fieldType, wireType, buffer, pos)
       value = pb.zigzag_decode64(raw)
     elseif fieldType == protoSchema.DataType.SINT32 then
       local raw
-      raw, pos = pb.decode_varint(buffer, pos)
-      value = pb.zigzag_decode32(raw)
+      raw, pos = pb.decode_varint64(buffer, pos)
+      value = pb.zigzag_decode32(raw[2])
     elseif fieldType == protoSchema.DataType.BOOL then
       value, pos = pb.decode_varint(buffer, pos)
       value = value ~= 0 -- Convert to boolean
+    elseif fieldType == protoSchema.DataType.UINT32 then
+      local raw
+      raw, pos = pb.decode_varint64(buffer, pos)
+      value = raw[2]
     else
-      -- INT32, UINT32, ENUM, etc.
-      value, pos = pb.decode_varint(buffer, pos)
+      -- INT32, ENUM: truncated to the low word, so 0xFFFFFFFF reads as -1.
+      local raw
+      raw, pos = pb.decode_varint64(buffer, pos)
+      value = bit32_to_signed(raw[2])
     end
   elseif wireType == protoSchema.WireType.FIXED64 then
     if fieldType == protoSchema.DataType.DOUBLE then
@@ -572,8 +536,11 @@ local function decode_scalar(protoSchema, fieldType, wireType, buffer, pos)
   elseif wireType == protoSchema.WireType.FIXED32 then
     if fieldType == protoSchema.DataType.FLOAT then
       value, pos = pb.decode_float(buffer, pos)
+    elseif fieldType == protoSchema.DataType.SFIXED32 then
+      value, pos = pb.decode_fixed32(buffer, pos)
+      value = bit32_to_signed(value)
     else
-      -- FIXED32, SFIXED32
+      -- FIXED32
       value, pos = pb.decode_fixed32(buffer, pos)
     end
   else
@@ -1224,11 +1191,7 @@ function pb.selftest()
     { -2147483648, 4294967295 },
   }
   for _, t in ipairs(zigzag32_vectors) do
-    local enc = pb.zigzag_encode32(t[1])
-    if enc < 0 then
-      enc = enc + 0x100000000
-    end
-    assert_eq(enc, t[2], "zigzag32 encode " .. t[1])
+    assert_eq(pb.zigzag_encode32(t[1]), t[2], "zigzag32 encode " .. t[1])
   end
 
   for _, v in ipairs({ 0, 1, -1, 100, -100, 2147483647, -2147483648 }) do
