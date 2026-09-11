@@ -366,8 +366,7 @@ function pb.decode_float(buffer, pos)
   end
 
   -- A subnormal carries no implicit leading one and sits at the minimum exponent
-  -- rather than at the bias. Reading one as 1 + m / 2^23 scaled by 2^(e-127) made
-  -- 01000000 come back as 5.88e-39 instead of 1.40e-45.
+  -- rather than at the bias.
   local result
   if e == 0 then
     result = math_ldexp(m / 0x800000, -126)
@@ -456,7 +455,7 @@ function pb.decode_double(buffer, pos)
     return NAN, pos + 8
   end
 
-  -- Subnormal, as in decode_float. 0100000000000000 read as 1.11e-308, not 5e-324.
+  -- Subnormal, as in decode_float.
   local result
   if e == 0 then
     result = math_ldexp(m / 0x10000000000000, -1022)
@@ -649,6 +648,7 @@ local function ascending(a, b)
   if ta ~= tb then
     return ta < tb
   elseif ta == "table" then
+    -- Unsigned high word, so negative 64-bit keys sort after positive ones: deterministic, not numeric.
     return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2])
   elseif ta == "boolean" then
     return b and not a

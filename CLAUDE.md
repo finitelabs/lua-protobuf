@@ -169,10 +169,6 @@ This is the section to read before assuming a `.proto` will round-trip:
   drops them.
 - **Groups are unsupported.** `DataType` has no `GROUP` (10) and `WireType` has no
   SGROUP (3) / EGROUP (4); both raise `"Unknown wire type"`.
-- **`float` and `double` are fully IEEE 754 in both directions**, including
-  subnormals, the flush-to-zero and overflow-to-infinity boundaries, NaN, the
-  infinities and negative zero. Narrowing a double to a `float` rounds to nearest
-  with ties to even, as the hardware does. Covered by `test/float_vectors_test.lua`.
 
 ### Schema Structure
 
