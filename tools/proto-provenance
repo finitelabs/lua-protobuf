@@ -1,0 +1,242 @@
+#!/usr/bin/env sh
+# Stamp and verify the provenance header on a generated schema.
+#
+#   proto-provenance stamp <schema> <runtime> [key=value ...]
+#   proto-provenance check <schema> <runtime> [key=value ...]
+#
+# <runtime> is the vendored protobuf.lua. `generator` and `body-sha256` are
+# reserved field keys. check reads only files already in the tree: no protoc,
+# Python, stylua, lua-protobuf checkout, or network.
+
+set -u
+
+BOUNDARY='-- provenance-boundary: every line below is covered by body-sha256'
+BANNER='-- Generated Lua schema from protobuf descriptor set'
+BANNER_END='-- Do not edit manually'
+RESERVED='generator body-sha256'
+
+die() {
+  echo "proto-provenance: $*" >&2
+  exit 1
+}
+
+sha256() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | cut -d' ' -f1
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -d' ' -f1
+  else
+    die "no sha256 tool found (looked for shasum, sha256sum)"
+  fi
+}
+
+count_lines() {
+  grep -c "$1" "$2" 2>/dev/null || true
+}
+
+# The Makefile injects VERSION from `git describe --exact-match --tags`; an untagged tree keeps "dev".
+runtime_version() {
+  file=$1
+  [ -f "$file" ] || die "$file not found; cannot determine the generator version"
+  n=$(count_lines '^local VERSION = ".*"$' "$file")
+  [ "$n" -eq 1 ] || die "expected exactly one VERSION assignment in $file, found $n"
+  v=$(sed -n 's/^local VERSION = "\(.*\)"$/\1/p' "$file")
+  [ -n "$v" ] || die "VERSION in $file is empty"
+  if [ "$v" = "dev" ]; then
+    die "$file was built from an untagged lua-protobuf tree (VERSION=dev); vendor a tagged release"
+  fi
+  case "$v" in
+    v[0-9]*) ;;
+    *) die "VERSION in $file is not a release tag: '$v'" ;;
+  esac
+  printf '%s' "$v"
+}
+
+validate_fields() {
+  for field in "$@"; do
+    case "$field" in
+      *=*) ;;
+      *) die "provenance field '$field' is not in key=value form" ;;
+    esac
+    key=${field%%=*}
+    case "$key" in
+      '' | *[!A-Za-z0-9_-]*) die "provenance field key '$key' must be non-empty and match [A-Za-z0-9_-]+" ;;
+    esac
+    for reserved in $RESERVED; do
+      if [ "$key" = "$reserved" ]; then
+        die "provenance field key '$key' is reserved by proto-provenance"
+      fi
+    done
+    [ -n "${field#*=}" ] || die "provenance field '$key' has an empty value"
+    n=0
+    for other in "$@"; do
+      if [ "${other%%=*}" = "$key" ]; then
+        n=$((n + 1))
+      fi
+    done
+    [ "$n" -eq 1 ] || die "provenance field key '$key' was supplied $n times"
+  done
+}
+
+boundary_count() {
+  count_lines "^$BOUNDARY\$" "$1"
+}
+
+body() {
+  # Order matters: printing before the match is what excludes the boundary line itself.
+  awk -v b="$BOUNDARY" 'seen { print } $0 == b { seen = 1 }' "$1"
+}
+
+body_hash() {
+  body "$1" | sha256
+}
+
+# Header fields are read from above the boundary only, so a body line cannot impersonate one.
+header_field() {
+  file=$1
+  key=$2
+  n=$(awk -v b="$BOUNDARY" -v k="-- $key: " '
+    index($0, k) == 1 { c++ }
+    $0 == b { exit }
+    END { print c + 0 }
+  ' "$file")
+  [ "$n" -eq 1 ] || die "expected exactly one '$key' line in the $file header, found $n"
+  awk -v b="$BOUNDARY" -v k="-- $key: " '
+    index($0, k) == 1 { print substr($0, length(k) + 1); exit }
+    $0 == b { exit }
+  ' "$file"
+}
+
+header_keys() {
+  awk -v b="$BOUNDARY" '
+    $0 == b { exit }
+    /^-- [A-Za-z0-9_-]+: / { key = $2; sub(/:$/, "", key); print key }
+  ' "$1"
+}
+
+recorded_keys() {
+  header_keys "$1" | grep -vxF -e generator -e body-sha256 | sort || true
+}
+
+supplied_keys() {
+  for field in "$@"; do
+    printf '%s\n' "${field%%=*}"
+  done | sort
+}
+
+flatten() {
+  if [ -z "$1" ]; then
+    printf '(none)'
+  else
+    printf '%s' "$1" | tr '\n' ' '
+  fi
+}
+
+require_header() {
+  file=$1
+  [ -f "$file" ] || die "$file not found"
+  n=$(boundary_count "$file")
+  [ "$n" -eq 1 ] || die "$file has $n provenance boundary lines, expected exactly 1; run 'make gen-proto' to regenerate and stamp it"
+}
+
+cmd_stamp() {
+  schema=$1
+  runtime=$2
+  shift 2
+  [ -f "$schema" ] || die "$schema not found"
+  generator=$(runtime_version "$runtime") || exit 1
+
+  tmp=$(mktemp) || die "mktemp failed"
+  # A first stamp keys on the generator's own banner so that banner is not duplicated into the body.
+  if [ "$(boundary_count "$schema")" -eq 1 ]; then
+    body "$schema" > "$tmp"
+  else
+    n=$(count_lines "^$BANNER_END\$" "$schema")
+    [ "$n" -eq 1 ] || die "expected exactly one '$BANNER_END' line in an unstamped $schema, found $n"
+    awk -v b="$BANNER_END" 'seen { print } $0 == b { seen = 1 }' "$schema" > "$tmp"
+  fi
+
+  hash=$(sha256 < "$tmp")
+  summary=""
+  for field in "$@"; do
+    summary="$summary${field%%=*} ${field#*=}, "
+  done
+  {
+    echo "$BANNER"
+    echo "$BANNER_END"
+    echo "--"
+    echo "-- generator: $generator"
+    for field in "$@"; do
+      echo "-- ${field%%=*}: ${field#*=}"
+    done
+    echo "-- body-sha256: $hash"
+    echo "$BOUNDARY"
+    cat "$tmp"
+  } > "$schema.new"
+  rm -f "$tmp"
+  mv -f "$schema.new" "$schema"
+  echo "stamped $schema: generator $generator, ${summary}body $hash"
+}
+
+cmd_check() {
+  schema=$1
+  runtime=$2
+  shift 2
+  require_header "$schema"
+
+  # An unsupplied field would go uncompared, so dropping one from a Makefile would pass vacuously.
+  got_keys=$(recorded_keys "$schema")
+  want_keys=$(supplied_keys "$@")
+  if [ "$got_keys" != "$want_keys" ]; then
+    echo "proto-provenance: $schema records a different set of provenance fields than was supplied" >&2
+    echo "  header:   $(flatten "$got_keys")" >&2
+    echo "  supplied: $(flatten "$want_keys")" >&2
+    exit 1
+  fi
+
+  want_generator=$(runtime_version "$runtime") || exit 1
+  got_generator=$(header_field "$schema" generator) || exit 1
+  got_hash=$(header_field "$schema" body-sha256) || exit 1
+
+  # Schema and decoder are a matched pair from one release: how a field is represented is co-designed with how it is read back.
+  [ "$got_generator" = "$want_generator" ] || die "$schema comes from lua-protobuf $got_generator but the vendored decoder is $want_generator; run 'make gen-proto' to put the pair back in lockstep"
+
+  for field in "$@"; do
+    key=${field%%=*}
+    got=$(header_field "$schema" "$key") || exit 1
+    [ "$got" = "${field#*=}" ] || die "$schema was generated from $key $got but $key is now ${field#*=}; run 'make gen-proto'"
+  done
+
+  have_hash=$(body_hash "$schema")
+  [ -n "$have_hash" ] || die "computed an empty body hash for $schema; the provenance header is malformed"
+  if [ "$got_hash" != "$have_hash" ]; then
+    echo "proto-provenance: $schema body does not match its header" >&2
+    echo "  header: $got_hash" >&2
+    echo "  actual: $have_hash" >&2
+    echo "  The file was edited by hand, or reformatted (a stylua upgrade rewrites it)." >&2
+    echo "  Either way, run 'make gen-proto' to regenerate and re-stamp." >&2
+    exit 1
+  fi
+  summary=""
+  for field in "$@"; do
+    summary="$summary, ${field%%=*} ${field#*=}"
+  done
+  echo "$schema matches its provenance: generator $got_generator$summary"
+}
+
+[ $# -ge 1 ] || die "usage: proto-provenance stamp|check <schema> <runtime> [key=value ...]"
+mode=$1
+shift
+case "$mode" in
+  stamp | check) ;;
+  *) die "unknown mode '$mode'; expected stamp or check" ;;
+esac
+[ $# -ge 2 ] || die "usage: proto-provenance $mode <schema> <runtime> [key=value ...]"
+schema_arg=$1
+runtime_arg=$2
+shift 2
+validate_fields "$@"
+case "$mode" in
+  stamp) cmd_stamp "$schema_arg" "$runtime_arg" "$@" ;;
+  check) cmd_check "$schema_arg" "$runtime_arg" "$@" ;;
+esac
