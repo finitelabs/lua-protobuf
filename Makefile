@@ -249,6 +249,15 @@ check-float-vectors:
 	@echo "Checked-in float vectors match the generator."
 	@LUA_BINARY=$(LUA_BINARY) .venv/bin/python3 tools/check_float_vectors
 
+# Check the generator sorts message options. Needs the venv, so not in `check`.
+.PHONY: check-option-order
+check-option-order:
+	@if [ ! -f .venv/bin/python3 ]; then \
+		echo "Python virtual environment not found. Run 'make setup-schema-generator' first."; \
+		exit 1; \
+	fi
+	@.venv/bin/python3 tools/check_option_order
+
 # Format Lua code with stylua
 .PHONY: format
 format:

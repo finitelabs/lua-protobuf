@@ -65,6 +65,9 @@ jobs:
       - name: Check float vectors
         run: make check-float-vectors
 
+      - name: Check option order
+        run: make check-option-order
+
   test:
     needs: check
     runs-on: ubuntu-latest

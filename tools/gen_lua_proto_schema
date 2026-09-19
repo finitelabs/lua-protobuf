@@ -295,8 +295,11 @@ def parse_message(
         # Some messages extend MessageOptions in a way that does not get parsed
         # into the Extensions field but is available in the raw data.
         if len(message.options.Extensions) == 0 and message_option_extensions:
-            for num, typ, val in parse_unknown_fields(
-                    message.options.SerializeToString()
+            # protoc does not serialize these in a stable order: 3.21 and 22.5 emit
+            # them in .proto declaration order, 23.4 and later ascending by number.
+            for num, typ, val in sorted(
+                    parse_unknown_fields(message.options.SerializeToString()),
+                    key=lambda unknown: unknown[0],
             ):
                 if num not in message_option_extensions:
                     continue
@@ -308,7 +311,7 @@ def parse_message(
                     val = f"\"{val.decode('utf-8', 'replace')}\""
                 lua += ("  " * (indent + 2)) + f"{name} = {val},\n"
         else:
-            for field in message.options.Extensions:
+            for field in sorted(message.options.Extensions, key=lambda ext: ext.number):
                 if not new_line_added:
                     lua += "\n"
                     new_line_added = True

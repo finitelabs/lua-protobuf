@@ -452,6 +452,20 @@ deliver them, but `parse_descriptor_set` skips any file whose package is
 `check-schema` fails. `test/test_messages_proto3.proto` is vendored with those
 fields trimmed for that reason. Tracked as FL-17.
 
+**Message options are sorted by field number, and the sort is load-bearing.** protoc
+does not serialize extension options in a stable order: 3.21 and 22.5 emit them in
+`.proto` declaration order, 23.4 and later ascending by number. The generator reads
+those bytes back, so without the sort the same `.proto` produces two different Lua
+files depending on the toolchain, and a consumer's drift check reports a false
+positive against an unpinned protoc. `make check-option-order` guards it.
+
+That check builds its descriptor by hand rather than from a fixture. Under a modern
+protoc an unsorted generator already emits ascending, so a fixture would pass on the
+defect everywhere except an old-protoc CI runner; feeding the options in descending
+order is what makes the check fail on a revert under every protoc. CI installs
+Ubuntu's `protobuf-compiler`, which is 3.21.12 on noble, so `check-types` and
+`check-schema` run on the declaration-order side of that split.
+
 ## Building
 
 The build process uses `amalg` to create single-file distributions:

@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""
+Verify message options are emitted in ascending field number order.
+
+protoc does not serialize extension options in a stable order: 3.21 and 22.5 emit
+them in `.proto` declaration order, 23.4 and later ascending by field number. The
+generator reads those bytes back, so without a sort its output depends on which
+protoc built the descriptor.
+
+A fixture `.proto` cannot check this on its own. Under a modern protoc an unsorted
+generator already emits ascending, so the check would pass on the defect and only
+fail where CI happens to install an old protoc. The descriptor here is therefore
+built by hand with the options in descending order, which is the one input that
+tells a sorted generator from an unsorted one under every protoc.
+
+1. Setup: the options really do arrive descending, so the comparison is not vacuous.
+2. Order: the generator emits them ascending.
+"""
+import os
+import re
+import sys
+
+from google.protobuf.descriptor_pb2 import DescriptorProto
+from google.protobuf.internal import decoder, encoder
+
+_GEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gen_lua_proto_schema")
+_module = type(sys)("gen_lua_proto_schema")
+exec(compile(open(_GEN).read(), _GEN, "exec"), _module.__dict__)
+
+# Numbers and shapes mirror ESPHome's api_options.proto, the schema that surfaced this.
+EXTENSIONS = {1036: "id", 1038: "ifdef", 1041: "base_class"}
+
+
+def varint(number: int, value: int) -> bytes:
+    out = bytearray()
+    write = encoder._VarintEncoder()
+    write(out.extend, number << 3 | 0, True)
+    write(out.extend, value, True)
+    return bytes(out)
+
+
+def length_delimited(number: int, value: str) -> bytes:
+    out = bytearray()
+    write = encoder._VarintEncoder()
+    write(out.extend, number << 3 | 2, True)
+    encoded = value.encode()
+    write(out.extend, len(encoded), True)
+    out.extend(encoded)
+    return bytes(out)
+
+
+def wire_order(raw: bytes) -> list[int]:
+    """Field numbers in the order they appear in `raw`."""
+    pos = 0
+    numbers = []
+    while pos < len(raw):
+        tag, pos = decoder._DecodeVarint(raw, pos)
+        numbers.append(tag >> 3)
+        if tag & 0x7 == 0:
+            _, pos = decoder._DecodeVarint(raw, pos)
+        else:
+            length, pos = decoder._DecodeVarint(raw, pos)
+            pos += length
+    return numbers
+
+
+def main() -> int:
+    failures = []
+
+    message = DescriptorProto()
+    message.name = "OptionOrder"
+    message.options.MergeFromString(
+        length_delimited(1041, "BaseProtoMessage") + varint(1038, 1) + varint(1036, 3)
+    )
+
+    arrived = wire_order(message.options.SerializeToString())
+    expected_input = sorted(EXTENSIONS, reverse=True)
+    if arrived != expected_input:
+        failures.append(
+            "options did not arrive descending: %s, wanted %s. The generator would be "
+            "handed sorted input and the order assertion below would pass on any "
+            "generator." % (arrived, expected_input)
+        )
+
+    lua = _module.parse_message(message, message_option_extensions=EXTENSIONS)
+    body = lua.split("options = {", 1)[1].split("}", 1)[0]
+    emitted = re.findall(r"^\s*(\w+) = ", body, re.MULTILINE)
+    wanted = [EXTENSIONS[number] for number in sorted(EXTENSIONS)]
+    if emitted != wanted:
+        failures.append("emitted %s, wanted %s" % (emitted, wanted))
+
+    print("Option order: %d options fed in descending order, emitted as %s"
+          % (len(arrived), emitted))
+    for detail in failures:
+        print("  FAIL: " + detail)
+    if failures:
+        print("Option order: FAILED")
+        return 1
+    print("Option order: the generator sorts by field number")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
