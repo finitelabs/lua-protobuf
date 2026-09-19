@@ -183,6 +183,12 @@ check-schema:
 	@.venv/bin/python3 tools/gen_lua_proto_schema build/empty.schema.lua empty.proto
 	@$(LUA_BINARY) tools/check_schema_refs.lua build/empty.schema.lua
 
+# Exercise tools/proto-provenance against its positive controls. Needs no venv,
+# no protoc and no network, the same footing a consumer's check runs on.
+.PHONY: check-provenance
+check-provenance:
+	@./test/proto_provenance_controls.sh
+
 # Regenerate the checked-in wire-format schema and golden vectors
 .PHONY: gen-wire-vectors
 gen-wire-vectors:
@@ -248,12 +254,6 @@ check-float-vectors:
 	fi
 	@echo "Checked-in float vectors match the generator."
 	@LUA_BINARY=$(LUA_BINARY) .venv/bin/python3 tools/check_float_vectors
-
-# Exercise tools/proto-provenance against its positive controls. Needs no venv,
-# no protoc and no network, the same footing a consumer's check runs on.
-.PHONY: check-provenance
-check-provenance:
-	@./test/proto_provenance_controls.sh
 
 # Format Lua code with stylua
 .PHONY: format
