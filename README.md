@@ -121,10 +121,10 @@ command line is an error rather than a pass, so dropping one from a Makefile
 cannot silently retire the comparison. `generator` and `body-sha256` are reserved.
 
 `stamp` runs during generation, where the toolchain is present anyway. `check`
-reads only files already in the tree: no protoc, Python, stylua, lua-protobuf
-checkout or network. That is why a consumer vendors this script alongside
-`protobuf.lua` and runs its own copy, rather than delegating into a checkout of
-this repo.
+regenerates nothing and reads only files already in the tree: no protoc, Python,
+stylua or network. A consumer gets the tool by checking out this repo at the
+release tag its vendored `protobuf.lua` came from, which needs no toolchain, and
+runs it against its own tree.
 
 It does not defend against a forged header, where the body is edited and the
 hash recomputed. The threat is accidental drift.
