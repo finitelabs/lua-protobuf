@@ -83,6 +83,52 @@ make gen-schema PROTO="https://example.com/api.proto" OUTPUT=output_schema.lua
 make gen-schema PROTO="local.proto https://example.com/remote.proto" OUTPUT=output_schema.lua
 ```
 
+### Recording Schema Provenance
+
+A generated schema is marked "Do not edit manually", and `tools/proto-provenance`
+is what asserts it. `stamp` writes a header recording what produced the schema;
+`check` verifies the schema still matches that header.
+
+```bash
+tools/proto-provenance stamp src/proto_schema.lua vendor/protobuf.lua esphome=2026.8.2
+tools/proto-provenance check src/proto_schema.lua vendor/protobuf.lua esphome=2026.8.2
+```
+
+```lua
+-- Generated Lua schema from protobuf descriptor set
+-- Do not edit manually
+--
+-- generator: v0.6.9
+-- esphome: 2026.8.2
+-- body-sha256: 7b363c22ecbeb0c31b59eb6af83e322f4fd7a8dea7a2daca122d70131dcc50dc
+-- provenance-boundary: every line below is covered by body-sha256
+```
+
+`check` compares three things:
+
+1. header `generator` against `VERSION` in the vendored runtime
+2. every caller-supplied `key=value` against the header line of that name
+3. header `body-sha256` against a fresh hash of everything below the boundary
+
+Comparison 1 is the matched-pair invariant: the generator that emits the schema
+and the runtime that decodes against it ship from one release, and how a field is
+represented is co-designed with how it is read back. It is not a staleness check.
+
+Comparison 2's fields are opaque. The tool records and compares whatever the
+caller passes without interpreting it, so a consumer pins its own upstream
+versions through it. A field recorded in the header but not supplied on the
+command line is an error rather than a pass, so dropping one from a Makefile
+cannot silently retire the comparison. `generator` and `body-sha256` are reserved.
+
+`stamp` runs during generation, where the toolchain is present anyway. `check`
+regenerates nothing and reads only files already in the tree: no protoc, Python,
+stylua or network. A consumer gets the tool by checking out this repo at the
+release tag its vendored `protobuf.lua` came from, which needs no toolchain, and
+runs it against its own tree.
+
+It does not defend against a forged header, where the body is edited and the
+hash recomputed. The threat is accidental drift.
+
 ### Basic Example
 
 ```lua
@@ -167,10 +213,11 @@ LUA_BINARY=lua5.1 ./run_tests.sh
 ### Code Quality
 
 ```bash
-make check               # Run format check, lint, check-types, and typecheck
+make check               # Run format check, lint, check-provenance, check-types, and typecheck
 make format              # Format code with stylua
 make format-check        # Check formatting without modifying
 make lint                # Run luacheck
+make check-provenance    # Run the proto-provenance positive controls
 make check-types         # Verify types.lua matches empty.proto
 make typecheck           # Check annotations with lua-language-server
 ```

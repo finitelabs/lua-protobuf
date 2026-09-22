@@ -183,6 +183,12 @@ check-schema:
 	@.venv/bin/python3 tools/gen_lua_proto_schema build/empty.schema.lua empty.proto
 	@$(LUA_BINARY) tools/check_schema_refs.lua build/empty.schema.lua
 
+# Exercise tools/proto-provenance against its positive controls. Needs no venv,
+# no protoc and no network, the same footing a consumer's check runs on.
+.PHONY: check-provenance
+check-provenance:
+	@./test/proto_provenance_controls.sh
+
 # Regenerate the checked-in wire-format schema and golden vectors
 .PHONY: gen-wire-vectors
 gen-wire-vectors:
@@ -304,7 +310,7 @@ typecheck:
 	fi
 
 .PHONY: check
-check: format-check lint check-types check-schema typecheck
+check: format-check lint check-provenance check-types check-schema typecheck
 	@echo "Code quality checks complete."
 
 # Clean generated files
@@ -334,6 +340,7 @@ help:
 	@echo "  make gen-types                             - Regenerate src/protobuf/types.lua"
 	@echo "  make check-types                           - Verify types.lua matches empty.proto"
 	@echo "  make check-schema                          - Verify generated schemas resolve subschemas"
+	@echo "  make check-provenance                      - Run the proto-provenance positive controls"
 	@echo ""
 	@echo "Wire Vectors (need Python; deliberately not part of check):"
 	@echo "  make gen-wire-vectors   - Regenerate the checked-in schema and goldens"
@@ -342,7 +349,7 @@ help:
 	@echo "  make check-float-vectors - Check those vectors for drift and against the oracle"
 	@echo ""
 	@echo "Code Quality:"
-	@echo "  make check              - Run format-check, lint, check-types, check-schema, and typecheck"
+	@echo "  make check              - Run format-check, lint, check-provenance, check-types, check-schema, and typecheck"
 	@echo "  make format             - Format code with stylua"
 	@echo "  make format-check       - Check code formatting"
 	@echo "  make lint               - Lint code with luacheck"
