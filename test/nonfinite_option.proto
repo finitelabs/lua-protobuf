@@ -9,5 +9,6 @@ extend google.protobuf.MessageOptions {
 }
 
 message NonFinite {
-  option (opt_double) = inf;
+  // protoc 3.x rejects the `inf` identifier; an overflowing literal still parses to infinity.
+  option (opt_double) = 1e999;
 }
