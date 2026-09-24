@@ -50,6 +50,63 @@ FIXED_WIDTH_FORMATS: dict[int, str] = {
     FieldDescriptorProto.TYPE_SFIXED32: "<i",
 }
 
+INT64_TYPES = {
+    FieldDescriptorProto.TYPE_INT64,
+    FieldDescriptorProto.TYPE_UINT64,
+    FieldDescriptorProto.TYPE_SINT64,
+    FieldDescriptorProto.TYPE_FIXED64,
+    FieldDescriptorProto.TYPE_SFIXED64,
+}
+
+LUA_STRING_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r"}
+
+
+def lua_string_literal(raw: bytes) -> str:
+    """Render bytes as a Lua string literal, keeping valid UTF-8 and escaping everything else."""
+    out = []
+    for ch in raw.decode("utf-8", "surrogateescape"):
+        code = ord(ch)
+        if ch in LUA_STRING_ESCAPES:
+            out.append(LUA_STRING_ESCAPES[ch])
+        elif code < 0x20 or code == 0x7F:
+            out.append(f"\\{code:03d}")
+        elif 0xDC80 <= code <= 0xDCFF:
+            out.append(f"\\{code - 0xDC00:03d}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+def lua_number_literal(value: float) -> str:
+    if math.isnan(value):
+        return "(0/0)"
+    if math.isinf(value):
+        return "math.huge" if value > 0 else "-math.huge"
+    return str(value)
+
+
+def option_literal(name: str, ext_type: int, kind: str, val) -> str:
+    """Render a raw MessageOptions extension value as a Lua literal by its declared type."""
+    type_name = FieldDescriptorProto.Type.Name(ext_type)
+    if kind == "bytes":
+        if ext_type not in (FieldDescriptorProto.TYPE_STRING, FieldDescriptorProto.TYPE_BYTES):
+            raise ValueError(f"Option {name} is {type_name}, which has no Lua literal")
+        return lua_string_literal(val)
+    if kind == "fixed":
+        (val,) = struct.unpack(FIXED_WIDTH_FORMATS[ext_type], val)
+        if isinstance(val, float):
+            return lua_number_literal(val)
+    elif ext_type == FieldDescriptorProto.TYPE_BOOL:
+        return "true" if val else "false"
+    elif ext_type in (FieldDescriptorProto.TYPE_INT32, FieldDescriptorProto.TYPE_INT64):
+        val = val - (1 << 64) if val >= 1 << 63 else val
+    elif ext_type in (FieldDescriptorProto.TYPE_SINT32, FieldDescriptorProto.TYPE_SINT64):
+        val = (val >> 1) ^ -(val & 1)
+    if ext_type in INT64_TYPES and abs(val) > 1 << 53:
+        raise ValueError(f"Option {name} = {val} ({type_name}) exceeds 2^53 and would round in Lua")
+    return str(val)
+
+
 # Lua wire type mapping
 WIRE_TYPE_MAP: dict[int, str] = {
     FieldDescriptorProto.TYPE_DOUBLE: "ProtoSchema.WireType.FIXED64",
@@ -257,7 +314,7 @@ def parse_enum_value(value: EnumValueDescriptorProto, indent: int = 0) -> str:
     return ("  " * indent) + f"{value.name} = {value.number},\n"
 
 
-def parse_unknown_fields(raw_bytes: bytes):
+def parse_unknown_fields(raw_bytes: bytes, extensions: dict[int, tuple[str, int]] | None = None):
     """
     Minimal parser for unknown protobuf fields.
     Only decodes varints and strings for demonstration.
@@ -287,6 +344,11 @@ def parse_unknown_fields(raw_bytes: bytes):
         elif wire_type == 5:  # 32-bit
             fields.append((field_number, "fixed", raw_bytes[pos: pos + 4]))
             pos += 4
+        elif extensions and field_number in extensions:
+            name, ext_type = extensions[field_number]
+            raise ValueError(
+                f"Option {name} is {FieldDescriptorProto.Type.Name(ext_type)}, which has no Lua literal"
+            )
         else:
             raise Exception(f"Unsupported wire type: {wire_type}")
     return fields
@@ -313,7 +375,7 @@ def parse_message(
         # into the Extensions field but is available in the raw data.
         if len(message.options.Extensions) == 0 and message_option_extensions:
             for num, typ, val in parse_unknown_fields(
-                    message.options.SerializeToString()
+                    message.options.SerializeToString(), message_option_extensions
             ):
                 if num not in message_option_extensions:
                     continue
@@ -321,13 +383,7 @@ def parse_message(
                     lua += "\n"
                     new_line_added = True
                 name, ext_type = message_option_extensions[num]
-                if typ == "bytes":
-                    val = f"\"{val.decode('utf-8', 'replace')}\""
-                elif typ == "fixed":
-                    (val,) = struct.unpack(FIXED_WIDTH_FORMATS[ext_type], val)
-                    if isinstance(val, float) and not math.isfinite(val):
-                        raise ValueError(f"Option {name} = {val} has no Lua literal")
-                lua += ("  " * (indent + 2)) + f"{name} = {val},\n"
+                lua += ("  " * (indent + 2)) + f"{name} = {option_literal(name, ext_type, typ, val)},\n"
         else:
             for field in message.options.Extensions:
                 if not new_line_added:
@@ -343,6 +399,8 @@ def parse_message(
     lua += ("  " * (indent + 1)) + "fields = {"
     new_line_added = False
     for field in message.field:
+        if field.type == FieldDescriptorProto.TYPE_GROUP:
+            raise ValueError(f"Field {full_name}.{field.name} is a group, which the Lua schema cannot represent")
         if not new_line_added:
             lua += "\n"
             new_line_added = True
@@ -551,7 +609,7 @@ def main():
         lua_content = parse_descriptor_set(descriptor_set)
 
         # Write to output
-        with open(args.output, "w") as f:
+        with open(args.output, "w", encoding="utf-8") as f:
             f.write(
                 dedent(
                     f"""\

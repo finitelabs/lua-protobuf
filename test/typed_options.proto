@@ -1,0 +1,40 @@
+syntax = "proto2";
+
+// Fixture for `make check-schema`: varint, string and bytes options decoded by their declared type.
+
+import "google/protobuf/descriptor.proto";
+
+enum Color {
+  RED = 0;
+  GREEN = 2;
+}
+
+extend google.protobuf.MessageOptions {
+  optional bool opt_true = 50101;
+  optional bool opt_false = 50102;
+  optional int32 opt_int32 = 50103;
+  optional int64 opt_int64 = 50104;
+  optional sint32 opt_sint32 = 50105;
+  optional sint64 opt_sint64 = 50106;
+  optional uint64 opt_uint64 = 50107;
+  optional Color opt_enum = 50108;
+  optional string opt_string = 50109;
+  optional bytes opt_bytes = 50110;
+  optional int64 opt_int64_limit = 50111;
+  optional sfixed64 opt_sfixed64_limit = 50112;
+}
+
+message Typed {
+  option (opt_true) = true;
+  option (opt_false) = false;
+  option (opt_int32) = -2;
+  option (opt_int64) = -3;
+  option (opt_sint32) = -4;
+  option (opt_sint64) = -5;
+  option (opt_uint64) = 6;
+  option (opt_enum) = GREEN;
+  option (opt_string) = "q\"b\\s\r\n\t\0012\177\303\251";
+  option (opt_bytes) = "\377\000z";
+  option (opt_int64_limit) = 9007199254740992;
+  option (opt_sfixed64_limit) = -9007199254740992;
+}

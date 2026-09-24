@@ -1,6 +1,6 @@
 syntax = "proto2";
 
-// Fixture for `make check-schema`: a group-typed option is wire type 3, which the generator rejects.
+// Fixture for `make check-schema`: a group-typed option has no Lua literal.
 
 import "google/protobuf/descriptor.proto";
 
