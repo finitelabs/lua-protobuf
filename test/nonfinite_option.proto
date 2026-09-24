@@ -1,0 +1,13 @@
+syntax = "proto2";
+
+// Fixture for `make check-schema`: an infinite double option has no Lua literal.
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.MessageOptions {
+  optional double opt_double = 50001;
+}
+
+message NonFinite {
+  option (opt_double) = inf;
+}

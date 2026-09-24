@@ -1,0 +1,25 @@
+syntax = "proto2";
+
+// Fixture for `make check-schema`: a message option of every fixed-width type, plus a varint control.
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.MessageOptions {
+  optional double opt_double = 50001;
+  optional float opt_float = 50002;
+  optional fixed32 opt_fixed32 = 50003;
+  optional sfixed32 opt_sfixed32 = 50004;
+  optional fixed64 opt_fixed64 = 50005;
+  optional sfixed64 opt_sfixed64 = 50006;
+  optional uint32 opt_varint = 50007;
+}
+
+message Fixed {
+  option (opt_double) = 1.5;
+  option (opt_float) = 0.25;
+  option (opt_fixed32) = 4294967295;
+  option (opt_sfixed32) = -2;
+  option (opt_fixed64) = 4294967296;
+  option (opt_sfixed64) = -4294967296;
+  option (opt_varint) = 7;
+}

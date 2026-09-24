@@ -182,6 +182,7 @@ check-schema:
 	@$(LUA_BINARY) tools/check_schema_refs.lua build/test_messages_proto3.schema.lua
 	@.venv/bin/python3 tools/gen_lua_proto_schema build/empty.schema.lua empty.proto
 	@$(LUA_BINARY) tools/check_schema_refs.lua build/empty.schema.lua
+	@LUA_BINARY=$(LUA_BINARY) ./test/gen_schema_controls.sh
 
 # Exercise tools/proto-provenance against its positive controls. Needs no venv,
 # no protoc and no network, the same footing a consumer's check runs on.

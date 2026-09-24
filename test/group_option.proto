@@ -1,0 +1,15 @@
+syntax = "proto2";
+
+// Fixture for `make check-schema`: a group-typed option is wire type 3, which the generator rejects.
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.MessageOptions {
+  optional group OptGroup = 50010 {
+    optional int32 a = 1;
+  }
+}
+
+message Grouped {
+  option (optgroup) = { a: 1 };
+}
