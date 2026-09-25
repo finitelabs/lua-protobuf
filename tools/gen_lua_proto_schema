@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import argparse
+import math
 import os
+import re
 import shutil
+import struct
 import subprocess
 import tempfile
 from textwrap import dedent
@@ -38,6 +41,90 @@ LUA_TYPE_MAP: dict[int, list[str]] = {
     FieldDescriptorProto.TYPE_SINT32: ["number"],
     FieldDescriptorProto.TYPE_SINT64: ["number", "Int64HighLow"],
 }
+
+FIXED_WIDTH_FORMATS: dict[int, str] = {
+    FieldDescriptorProto.TYPE_DOUBLE: "<d",
+    FieldDescriptorProto.TYPE_FIXED64: "<Q",
+    FieldDescriptorProto.TYPE_SFIXED64: "<q",
+    FieldDescriptorProto.TYPE_FLOAT: "<f",
+    FieldDescriptorProto.TYPE_FIXED32: "<I",
+    FieldDescriptorProto.TYPE_SFIXED32: "<i",
+}
+
+INT64_TYPES: set[int] = {
+    FieldDescriptorProto.TYPE_INT64,
+    FieldDescriptorProto.TYPE_UINT64,
+    FieldDescriptorProto.TYPE_SINT64,
+    FieldDescriptorProto.TYPE_FIXED64,
+    FieldDescriptorProto.TYPE_SFIXED64,
+}
+
+LUA_STRING_ESCAPES: dict[str, str] = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r"}
+
+# Reserved words across Lua 5.1 to 5.4, which cannot be bare table keys
+LUA_KEYWORDS: set[str] = {
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if",
+    "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+}
+
+
+def lua_string_literal(raw: bytes) -> str:
+    """Render bytes as a Lua string literal, keeping valid UTF-8 and escaping everything else."""
+    out = []
+    for ch in raw.decode("utf-8", "surrogateescape"):
+        code = ord(ch)
+        if ch in LUA_STRING_ESCAPES:
+            out.append(LUA_STRING_ESCAPES[ch])
+        elif code < 0x20 or code == 0x7F:
+            out.append(f"\\{code:03d}")
+        elif 0xDC80 <= code <= 0xDCFF:
+            out.append(f"\\{code - 0xDC00:03d}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+def lua_constructor_key(name: str) -> str:
+    """Render `name` as a key in a Lua table constructor, bracketed unless it is a plain identifier."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) and name not in LUA_KEYWORDS:
+        return name
+    return f"[{lua_string_literal(name.encode())}]"
+
+
+def lua_number_literal(value: float) -> str:
+    if math.isnan(value):
+        return "(0/0)"
+    if math.isinf(value):
+        return "math.huge" if value > 0 else "-math.huge"
+    if value == 0 and math.copysign(1, value) < 0:
+        # Lua 5.1 compiles the literal -0.0 to any earlier 0 constant in the chunk, dropping the sign
+        return "-(1/math.huge)"
+    return str(value)
+
+
+def option_literal(name: str, ext_type: int, kind: str, val) -> str:
+    """Render a raw MessageOptions extension value as a Lua literal by its declared type."""
+    type_name = FieldDescriptorProto.Type.Name(ext_type)
+    if kind == "bytes":
+        if ext_type == FieldDescriptorProto.TYPE_MESSAGE:
+            raise ValueError(f"Option {name} is {type_name}, which has no Lua literal")
+        if ext_type not in (FieldDescriptorProto.TYPE_STRING, FieldDescriptorProto.TYPE_BYTES):
+            raise ValueError(f"Option {name} is a packed repeated {type_name} field, which has no Lua literal")
+        return lua_string_literal(val)
+    if kind == "fixed":
+        (val,) = struct.unpack(FIXED_WIDTH_FORMATS[ext_type], val)
+        if isinstance(val, float):
+            return lua_number_literal(val)
+    elif ext_type == FieldDescriptorProto.TYPE_BOOL:
+        return "true" if val else "false"
+    elif ext_type in (FieldDescriptorProto.TYPE_INT32, FieldDescriptorProto.TYPE_INT64, FieldDescriptorProto.TYPE_ENUM):
+        val = val - (1 << 64) if val >= 1 << 63 else val
+    elif ext_type in (FieldDescriptorProto.TYPE_SINT32, FieldDescriptorProto.TYPE_SINT64):
+        val = (val >> 1) ^ -(val & 1)
+    if ext_type in INT64_TYPES and abs(val) > 1 << 53:
+        raise ValueError(f"Option {name} = {val} ({type_name}) exceeds 2^53 and would round in Lua")
+    return str(val)
+
 
 # Lua wire type mapping
 WIRE_TYPE_MAP: dict[int, str] = {
@@ -246,10 +333,10 @@ def parse_enum_value(value: EnumValueDescriptorProto, indent: int = 0) -> str:
     return ("  " * indent) + f"{value.name} = {value.number},\n"
 
 
-def parse_unknown_fields(raw_bytes: bytes):
+def parse_unknown_fields(raw_bytes: bytes, extensions: dict[int, tuple[str, int]] | None = None):
     """
-    Minimal parser for unknown protobuf fields.
-    Only decodes varints and strings for demonstration.
+    Split serialized options into (field number, kind, raw value) tuples, where kind is
+    "varint", "fixed" or "bytes". `option_literal` decodes the value by its declared type.
     """
 
     pos = 0
@@ -270,6 +357,17 @@ def parse_unknown_fields(raw_bytes: bytes):
             value = raw_bytes[pos: pos + length]
             pos += length
             fields.append((field_number, "bytes", value))
+        elif wire_type == 1:  # 64-bit
+            fields.append((field_number, "fixed", raw_bytes[pos: pos + 8]))
+            pos += 8
+        elif wire_type == 5:  # 32-bit
+            fields.append((field_number, "fixed", raw_bytes[pos: pos + 4]))
+            pos += 4
+        elif extensions and field_number in extensions:
+            name, ext_type = extensions[field_number]
+            raise ValueError(
+                f"Option {name} is {FieldDescriptorProto.Type.Name(ext_type)}, which has no Lua literal"
+            )
         else:
             raise Exception(f"Unsupported wire type: {wire_type}")
     return fields
@@ -277,7 +375,7 @@ def parse_unknown_fields(raw_bytes: bytes):
 
 def parse_message(
         message: DescriptorProto,
-        message_option_extensions: dict[int, str] | None = None,
+        message_option_extensions: dict[int, tuple[str, int]] | None = None,
         indent: int = 0,
         full_name: str | None = None,
         map_entries: dict[str, DescriptorProto] | None = None,
@@ -296,17 +394,15 @@ def parse_message(
         # into the Extensions field but is available in the raw data.
         if len(message.options.Extensions) == 0 and message_option_extensions:
             for num, typ, val in parse_unknown_fields(
-                    message.options.SerializeToString()
+                    message.options.SerializeToString(), message_option_extensions
             ):
                 if num not in message_option_extensions:
                     continue
                 if not new_line_added:
                     lua += "\n"
                     new_line_added = True
-                name = message_option_extensions[num]
-                if typ == "bytes":
-                    val = f"\"{val.decode('utf-8', 'replace')}\""
-                lua += ("  " * (indent + 2)) + f"{name} = {val},\n"
+                name, ext_type = message_option_extensions[num]
+                lua += ("  " * (indent + 2)) + f"{lua_constructor_key(name)} = {option_literal(name, ext_type, typ, val)},\n"
         else:
             for field in message.options.Extensions:
                 if not new_line_added:
@@ -322,6 +418,8 @@ def parse_message(
     lua += ("  " * (indent + 1)) + "fields = {"
     new_line_added = False
     for field in message.field:
+        if field.type == FieldDescriptorProto.TYPE_GROUP:
+            raise ValueError(f"Field {full_name}.{field.name} is a group, which the Lua schema cannot represent")
         if not new_line_added:
             lua += "\n"
             new_line_added = True
@@ -384,14 +482,14 @@ def parse_service(service, indent: int = 0) -> str:
     return lua
 
 
-def extract_message_option_extensions(fds: FileDescriptorSet) -> dict[int, str]:
-    """Build a map of field number to extension name for MessageOptions."""
+def extract_message_option_extensions(fds: FileDescriptorSet) -> dict[int, tuple[str, int]]:
+    """Build a map of field number to extension name and type for MessageOptions."""
     mapping = {}
     for fd in fds.file:
         for ext in fd.extension:
             if ext.extendee == ".google.protobuf.MessageOptions":
                 full_name = f"{fd.package}.{ext.name}" if fd.package else ext.name
-                mapping[ext.number] = full_name
+                mapping[ext.number] = (full_name, ext.type)
     return mapping
 
 
@@ -522,99 +620,95 @@ def main():
             ]
         )
 
-        try:
-            with open(os.path.join(tmpdir, "descriptor.pb"), "rb") as f:
-                descriptor_set = FileDescriptorSet()
-                descriptor_set.MergeFromString(f.read())
+        with open(os.path.join(tmpdir, "descriptor.pb"), "rb") as f:
+            descriptor_set = FileDescriptorSet()
+            descriptor_set.MergeFromString(f.read())
 
-            # Generate Lua schema
-            lua_content = parse_descriptor_set(descriptor_set)
+        # Generate Lua schema
+        lua_content = parse_descriptor_set(descriptor_set)
 
-            # Write to output
-            with open(args.output, "w") as f:
-                f.write(
-                    dedent(
-                        f"""\
-                    -- Generated Lua schema from protobuf descriptor set
-                    -- Do not edit manually
+        # Write to output
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(
+                dedent(
+                    f"""\
+                -- Generated Lua schema from protobuf descriptor set
+                -- Do not edit manually
 
-                    --- @class ProtoSchema
-                    local ProtoSchema = {{}}
+                --- @class ProtoSchema
+                local ProtoSchema = {{}}
                     
-                    --- Maps enum names to their definitions.
-                    ProtoSchema.Enum = {{}}
+                --- Maps enum names to their definitions.
+                ProtoSchema.Enum = {{}}
 
-                    --- Maps message names to their definitions.
-                    --- @type table<string, ProtoMessageSchema>
-                    ProtoSchema.Message = {{}}
+                --- Maps message names to their definitions.
+                --- @type table<string, ProtoMessageSchema>
+                ProtoSchema.Message = {{}}
 
-                    --- Maps service names to their method definitions.
-                    --- @type table<string, ProtoServiceSchema>
-                    ProtoSchema.RPC = {{}}
+                --- Maps service names to their method definitions.
+                --- @type table<string, ProtoServiceSchema>
+                ProtoSchema.RPC = {{}}
 
-                    --- ProtoWireType Maps protobuf wire types to their integer values.
-                    --- @enum ProtoWireType
-                    ProtoSchema.WireType = {{
-                      VARINT = 0,
-                      FIXED64 = 1,
-                      LENGTH_DELIMITED = 2,
-                      FIXED32 = 5,
-                    }}
+                --- ProtoWireType Maps protobuf wire types to their integer values.
+                --- @enum ProtoWireType
+                ProtoSchema.WireType = {{
+                  VARINT = 0,
+                  FIXED64 = 1,
+                  LENGTH_DELIMITED = 2,
+                  FIXED32 = 5,
+                }}
                     
-                    --- ProtoDataType Maps protobuf data types to their integer values.
-                    --- @enum ProtoDataType
-                    ProtoSchema.DataType = {{
-                      DOUBLE = 1,
-                      FLOAT = 2,
-                      INT64 = 3,
-                      UINT64 = 4,
-                      INT32 = 5,
-                      FIXED64 = 6,
-                      FIXED32 = 7,
-                      BOOL = 8,
-                      STRING = 9,
-                      MESSAGE = 11,
-                      BYTES = 12,
-                      UINT32 = 13,
-                      ENUM = 14,
-                      SFIXED32 = 15,
-                      SFIXED64 = 16,
-                      SINT32 = 17,
-                      SINT64 = 18,
-                    }}
+                --- ProtoDataType Maps protobuf data types to their integer values.
+                --- @enum ProtoDataType
+                ProtoSchema.DataType = {{
+                  DOUBLE = 1,
+                  FLOAT = 2,
+                  INT64 = 3,
+                  UINT64 = 4,
+                  INT32 = 5,
+                  FIXED64 = 6,
+                  FIXED32 = 7,
+                  BOOL = 8,
+                  STRING = 9,
+                  MESSAGE = 11,
+                  BYTES = 12,
+                  UINT32 = 13,
+                  ENUM = 14,
+                  SFIXED32 = 15,
+                  SFIXED64 = 16,
+                  SINT32 = 17,
+                  SINT64 = 18,
+                }}
 
-                    --- @class ProtoFieldSchema
-                    --- @field name string The name of the field.
-                    --- @field wireType ProtoWireType The protobuf wire type (see ProtoSchema.WireType).
-                    --- @field type ProtoDataType The protobuf type (see ProtoSchema.DataType).
-                    --- @field repeated boolean? Whether the field is repeated (optional).
-                    --- @field map boolean? Whether the field is a map, encoded as repeated `subschema` entries (optional).
-                    --- @field subschema string? The subschema name for nested messages (optional).
+                --- @class ProtoFieldSchema
+                --- @field name string The name of the field.
+                --- @field wireType ProtoWireType The protobuf wire type (see ProtoSchema.WireType).
+                --- @field type ProtoDataType The protobuf type (see ProtoSchema.DataType).
+                --- @field repeated boolean? Whether the field is repeated (optional).
+                --- @field map boolean? Whether the field is a map, encoded as repeated `subschema` entries (optional).
+                --- @field subschema string? The subschema name for nested messages (optional).
                     
-                    --- @class ProtoMessageSchema
-                    --- @field name string The name of the message type.
-                    --- @field options table<string, any> Message options.
-                    --- @field fields table<integer,  ProtoFieldSchema> A map of field numbers to ProtoFieldSchema definitions.
+                --- @class ProtoMessageSchema
+                --- @field name string The name of the message type.
+                --- @field options table<string, any> Message options.
+                --- @field fields table<integer,  ProtoFieldSchema> A map of field numbers to ProtoFieldSchema definitions.
                     
-                    --- @class ProtoServiceMethodSchema
-                    --- @field service string The name of the service.
-                    --- @field method string The method name.
-                    --- @field inputType ProtoMessageSchema The protobuf message type for the request.
-                    --- @field outputType ProtoMessageSchema The protobuf message type for the response.
+                --- @class ProtoServiceMethodSchema
+                --- @field service string The name of the service.
+                --- @field method string The method name.
+                --- @field inputType ProtoMessageSchema The protobuf message type for the request.
+                --- @field outputType ProtoMessageSchema The protobuf message type for the response.
                     
-                    --- @class ProtoServiceSchema
-                    --- @field [string] ProtoServiceMethodSchema Maps method names to their method definitions.
+                --- @class ProtoServiceSchema
+                --- @field [string] ProtoServiceMethodSchema Maps method names to their method definitions.
                     
-                    """
-                    )
+                """
                 )
-                f.write(lua_content)
-                f.write("return ProtoSchema\n")
+            )
+            f.write(lua_content)
+            f.write("return ProtoSchema\n")
 
-            print(f"Schema successfully generated and saved to {args.output}")
-
-        except Exception as e:
-            print(f"An error occurred: {e}")
+        print(f"Schema successfully generated and saved to {args.output}")
 
 
 if __name__ == "__main__":

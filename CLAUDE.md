@@ -440,9 +440,8 @@ Two traps follow from `check-types` being part of `check`:
   way.
 
 Only the *first* `PROTO` file is passed to `protoc`; additional ones are fetched
-and then ignored unless the first imports them. The generator also wraps
-generation in a bare `except` that prints the error and still exits 0, so check
-the output file rather than the exit status.
+and then ignored unless the first imports them. A failed generation exits
+non-zero and leaves `OUTPUT` untouched.
 
 **Well-known types do not survive.** `--include_imports` is passed and protoc does
 deliver them, but `parse_descriptor_set` skips any file whose package is
