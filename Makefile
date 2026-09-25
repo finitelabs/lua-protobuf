@@ -165,7 +165,8 @@ check-types:
 		exit 1; \
 	fi
 
-# Generate each fixture schema and assert its subschema references resolve
+# Generate each fixture schema and assert its subschema references resolve, then run the
+# generator's option round-trip and failure controls
 .PHONY: check-schema
 check-schema:
 	@if [ ! -f .venv/bin/python3 ]; then \

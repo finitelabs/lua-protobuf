@@ -2,6 +2,7 @@
 import argparse
 import math
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -50,7 +51,7 @@ FIXED_WIDTH_FORMATS: dict[int, str] = {
     FieldDescriptorProto.TYPE_SFIXED32: "<i",
 }
 
-INT64_TYPES = {
+INT64_TYPES: set[int] = {
     FieldDescriptorProto.TYPE_INT64,
     FieldDescriptorProto.TYPE_UINT64,
     FieldDescriptorProto.TYPE_SINT64,
@@ -58,7 +59,13 @@ INT64_TYPES = {
     FieldDescriptorProto.TYPE_SFIXED64,
 }
 
-LUA_STRING_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r"}
+LUA_STRING_ESCAPES: dict[str, str] = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r"}
+
+# Reserved words across Lua 5.1 to 5.4, which cannot be bare table keys
+LUA_KEYWORDS: set[str] = {
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if",
+    "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+}
 
 
 def lua_string_literal(raw: bytes) -> str:
@@ -77,11 +84,21 @@ def lua_string_literal(raw: bytes) -> str:
     return '"' + "".join(out) + '"'
 
 
+def lua_constructor_key(name: str) -> str:
+    """Render `name` as a key in a Lua table constructor, bracketed unless it is a plain identifier."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) and name not in LUA_KEYWORDS:
+        return name
+    return f"[{lua_string_literal(name.encode())}]"
+
+
 def lua_number_literal(value: float) -> str:
     if math.isnan(value):
         return "(0/0)"
     if math.isinf(value):
         return "math.huge" if value > 0 else "-math.huge"
+    if value == 0 and math.copysign(1, value) < 0:
+        # Lua 5.1 compiles the literal -0.0 to any earlier 0 constant in the chunk, dropping the sign
+        return "-(1/math.huge)"
     return str(value)
 
 
@@ -89,8 +106,10 @@ def option_literal(name: str, ext_type: int, kind: str, val) -> str:
     """Render a raw MessageOptions extension value as a Lua literal by its declared type."""
     type_name = FieldDescriptorProto.Type.Name(ext_type)
     if kind == "bytes":
-        if ext_type not in (FieldDescriptorProto.TYPE_STRING, FieldDescriptorProto.TYPE_BYTES):
+        if ext_type == FieldDescriptorProto.TYPE_MESSAGE:
             raise ValueError(f"Option {name} is {type_name}, which has no Lua literal")
+        if ext_type not in (FieldDescriptorProto.TYPE_STRING, FieldDescriptorProto.TYPE_BYTES):
+            raise ValueError(f"Option {name} is a packed repeated {type_name} field, which has no Lua literal")
         return lua_string_literal(val)
     if kind == "fixed":
         (val,) = struct.unpack(FIXED_WIDTH_FORMATS[ext_type], val)
@@ -98,7 +117,7 @@ def option_literal(name: str, ext_type: int, kind: str, val) -> str:
             return lua_number_literal(val)
     elif ext_type == FieldDescriptorProto.TYPE_BOOL:
         return "true" if val else "false"
-    elif ext_type in (FieldDescriptorProto.TYPE_INT32, FieldDescriptorProto.TYPE_INT64):
+    elif ext_type in (FieldDescriptorProto.TYPE_INT32, FieldDescriptorProto.TYPE_INT64, FieldDescriptorProto.TYPE_ENUM):
         val = val - (1 << 64) if val >= 1 << 63 else val
     elif ext_type in (FieldDescriptorProto.TYPE_SINT32, FieldDescriptorProto.TYPE_SINT64):
         val = (val >> 1) ^ -(val & 1)
@@ -316,8 +335,8 @@ def parse_enum_value(value: EnumValueDescriptorProto, indent: int = 0) -> str:
 
 def parse_unknown_fields(raw_bytes: bytes, extensions: dict[int, tuple[str, int]] | None = None):
     """
-    Minimal parser for unknown protobuf fields.
-    Only decodes varints and strings for demonstration.
+    Split serialized options into (field number, kind, raw value) tuples, where kind is
+    "varint", "fixed" or "bytes". `option_literal` decodes the value by its declared type.
     """
 
     pos = 0
@@ -383,7 +402,7 @@ def parse_message(
                     lua += "\n"
                     new_line_added = True
                 name, ext_type = message_option_extensions[num]
-                lua += ("  " * (indent + 2)) + f"{name} = {option_literal(name, ext_type, typ, val)},\n"
+                lua += ("  " * (indent + 2)) + f"{lua_constructor_key(name)} = {option_literal(name, ext_type, typ, val)},\n"
         else:
             for field in message.options.Extensions:
                 if not new_line_added:
