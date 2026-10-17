@@ -2,7 +2,7 @@
 
 A pure Lua implementation of Protocol Buffers encoding and decoding with **zero
 external dependencies**. This library provides a lightweight, portable
-implementation that runs on Lua 5.1, 5.2, 5.3, 5.4, and LuaJIT.
+implementation that runs on Lua 5.1, 5.2, 5.3, 5.4, 5.5, and LuaJIT.
 
 ## Features
 

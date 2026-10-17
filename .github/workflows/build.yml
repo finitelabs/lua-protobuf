@@ -15,30 +15,30 @@ jobs:
     runs-on: ubuntu-26.04
     name: Check
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Lua
-        uses: leafo/gh-actions-lua@v11
+        uses: leafo/gh-actions-lua@v13
         with:
           luaVersion: '5.4'
 
       - name: Setup LuaRocks
-        uses: leafo/gh-actions-luarocks@v5
+        uses: leafo/gh-actions-luarocks@v6
         with:
-          luarocksVersion: "3.12.2"
+          luarocksVersion: "3.13.0"
 
       - name: Install luacheck
         run: luarocks install luacheck
 
       - name: Install stylua
-        uses: JohnnyMorganz/stylua-action@v4
+        uses: JohnnyMorganz/stylua-action@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          version: v2.1.0
+          version: v2.6.0
           args: false # Will be run as part of `make check`
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -54,7 +54,7 @@ jobs:
             | tar -xz -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
         env:
-          LUALS: 3.19.0
+          LUALS: 3.19.2
 
       - name: Check
         run: make check
@@ -72,14 +72,14 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        lua-version: ['5.1', '5.2', '5.3', '5.4', 'luajit-2.0', 'luajit-2.1']
+        lua-version: ['5.1', '5.2', '5.3', '5.4', '5.5', 'luajit-2.0', 'luajit-2.1']
 
     name: Lua ${{ matrix.lua-version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Lua
-        uses: leafo/gh-actions-lua@v11
+        uses: leafo/gh-actions-lua@v13
         with:
           # The 'luajit-2.1' target tracks a rolling HEAD which has miscompiled
           # the signed arithmetic-shift edge cases in zigzag encoding (arshift of
@@ -108,17 +108,17 @@ jobs:
     runs-on: ubuntu-26.04
     name: Build Combined Module
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Lua
-        uses: leafo/gh-actions-lua@v11
+        uses: leafo/gh-actions-lua@v13
         with:
           luaVersion: '5.4'
 
       - name: Setup LuaRocks
-        uses: leafo/gh-actions-luarocks@v5
+        uses: leafo/gh-actions-luarocks@v6
         with:
-          luarocksVersion: "3.12.2"
+          luarocksVersion: "3.13.0"
 
       - name: Install amalg
         run: luarocks install amalg
@@ -151,7 +151,7 @@ jobs:
           fi
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: protobuf.lua
           path: build/protobuf.lua
