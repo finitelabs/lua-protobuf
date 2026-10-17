@@ -123,7 +123,7 @@ local `.luarc.json`. Re-run both enumerations when upgrading the server rather t
 assuming this list stayed complete.
 
 The server version is not pinned locally, though. `install-deps` takes whatever
-Homebrew has while CI pins 3.19.0, so compare the version the target prints if a
+Homebrew has while CI pins 3.19.2, so compare the version the target prints if a
 local result disagrees with CI.
 
 `vendor/` is both a `library` and an `ignoreDir`, which is load-bearing: with only
@@ -137,7 +137,7 @@ deprecated, which fails the gate. So the pin keeps this repo's own cross-version
 shims from tripping it.
 
 Part of `check`, so CI enforces it. CI pins the server version so the count cannot
-move under an upstream release; 3.18.2 and 3.19.0 agree here.
+move under an upstream release; 3.18.2, 3.19.0 and 3.19.2 agree here.
 
 ## Architecture
 
@@ -468,9 +468,9 @@ Version is automatically injected from git tags during release.
 
 - **build.yml**: Runs on push/PR to `main` or `master`
   - `check` job — `make check`: format-check, luacheck, check-types, check-schema,
-    and typecheck against lua-language-server 3.19.0, then `make check-wire-vectors`
+    and typecheck against lua-language-server 3.19.2, then `make check-wire-vectors`
     and `make check-float-vectors`
-  - `test` job — `make test-all` across Lua 5.1-5.4, LuaJIT 2.0/2.1
+  - `test` job — `make test-all` across Lua 5.1-5.5, LuaJIT 2.0/2.1
   - `build` job — single-file distributions
   - The `luajit-2.1` matrix entry is silently built as **`luajit-openresty`**:
     rolling LuaJIT HEAD miscompiled the signed arithmetic-shift edge cases in
@@ -481,8 +481,8 @@ Version is automatically injected from git tags during release.
   and `build/protobuf-portable.lua`.
 
 `make test-matrix` locally pins `5.1.5 5.2.4 5.3.6 5.4.8 luajit-2.1-dev` and needs
-`luaenv` plus the `luaenv-luarocks` plugin. It does **not** cover LuaJIT 2.0,
-which CI does.
+`luaenv` plus the `luaenv-luarocks` plugin. It does **not** cover Lua 5.5 or
+LuaJIT 2.0, which CI does.
 
 ## Code Style
 
