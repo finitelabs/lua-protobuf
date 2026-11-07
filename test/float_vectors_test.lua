@@ -86,13 +86,7 @@ for _, vector in ipairs(vectors) do
     check(
       bucket,
       testlib.same_number(decoded, vector.value),
-      string.format(
-        "%s | decode %s: want %.17g, got %.17g",
-        vector.name,
-        hex(vector.golden),
-        vector.value,
-        decoded
-      )
+      string.format("%s | decode %s: want %.17g, got %.17g", vector.name, hex(vector.golden), vector.value, decoded)
     )
     check(
       bucket,
@@ -113,13 +107,7 @@ for _, vector in ipairs(vectors) do
       check(
         bucket,
         encoded == vector.golden,
-        string.format(
-          "%s | encode %.17g: want %s, got %s",
-          vector.name,
-          input,
-          hex(vector.golden),
-          hex(encoded)
-        )
+        string.format("%s | encode %.17g: want %s, got %s", vector.name, input, hex(vector.golden), hex(encoded))
       )
     end
   end
@@ -127,13 +115,9 @@ end
 
 for _, key in ipairs(bucket_order) do
   local bucket = buckets[key]
-  report:note(string.format(
-    "%-22s %4d vectors, %5d assertions, %d failed",
-    key,
-    bucket.vectors,
-    bucket.checks,
-    bucket.failures
-  ))
+  report:note(
+    string.format("%-22s %4d vectors, %5d assertions, %d failed", key, bucket.vectors, bucket.checks, bucket.failures)
+  )
 end
 
 report:finish(

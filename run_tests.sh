@@ -11,6 +11,10 @@
 # test/<name>_test.lua is module <name>, underscores as dashes. Each runs with native
 # math.frexp/ldexp and again with them cleared, unless `-- @test-modes` restricts it.
 # `-- @test-name` sets its label.
+#
+# TEST_BUNDLE=build/protobuf.lua runs the same tests against that built file, with src/
+# off the path so nothing can load from it. The bundle is only registered as the
+# "protobuf" loader, so each test still decides what runs before it loads.
 
 set -e  # Exit on any error
 
@@ -46,6 +50,13 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Add repository root to Lua's package path
 # This allows require() to find modules in the src/vendor directories
 lua_path="$script_dir/?.lua;$script_dir/?/init.lua;$script_dir/src/?.lua;$script_dir/src/?/init.lua;$script_dir/vendor/?.lua;$LUA_PATH"
+load_lib=""
+if [ -n "$TEST_BUNDLE" ]; then
+    [ -f "$TEST_BUNDLE" ] || { echo -e "${red}Error: $TEST_BUNDLE not found; run make build${nc}"; exit 1; }
+    echo "Testing the built bundle: $TEST_BUNDLE"
+    lua_path="$script_dir/vendor/?.lua"
+    load_lib="package.preload['protobuf'] = assert(loadfile('$TEST_BUNDLE'));"
+fi
 
 module_keys=()
 declare -a module_files=()
@@ -161,7 +172,7 @@ run_module() {
         echo -e "${blue}Testing $labelled...${nc}"
         echo "---------------------------------------------"
 
-        if LUA_PATH="$lua_path" "$lua_binary" -e "$(math_preamble "$math_mode") $lua_command" 2>&1; then
+        if LUA_PATH="$lua_path" "$lua_binary" -e "$(math_preamble "$math_mode") $load_lib $lua_command" 2>&1; then
             echo -e "${green}✅ $labelled: ALL TESTS PASSED${nc}"
             passed_modules+=("$labelled")
         else

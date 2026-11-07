@@ -65,46 +65,8 @@ jobs:
       - name: Check float vectors
         run: make check-float-vectors
 
-  test:
-    needs: check
-    runs-on: ubuntu-26.04
-    continue-on-error: false
-    strategy:
-      fail-fast: true
-      matrix:
-        lua-version: ['5.1', '5.2', '5.3', '5.4', '5.5', 'luajit-2.0', 'luajit-2.1']
-
-    name: Lua ${{ matrix.lua-version }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup Lua
-        uses: leafo/gh-actions-lua@v13
-        with:
-          # The 'luajit-2.1' target tracks a rolling HEAD which has miscompiled
-          # the signed arithmetic-shift edge cases in zigzag encoding (arshift of
-          # INT_MIN). Pin that matrix entry to the stable OpenResty LuaJIT build;
-          # the job name stays "Lua luajit-2.1" so the required status check matches.
-          luaVersion: ${{ matrix.lua-version == 'luajit-2.1' && 'luajit-openresty' || matrix.lua-version }}
-
-      - name: Setup tests
-        run: |
-          # Set the correct binary name based on the Lua version
-          if [[ "${{ matrix.lua-version }}" == luajit* ]]; then
-            LUA_BINARY=luajit
-          else
-            LUA_BINARY=lua
-          fi
-
-          echo "LUA_BINARY=$LUA_BINARY" >> "$GITHUB_ENV"
-          ${LUA_BINARY} -v
-
-      - name: Run tests
-        run: |
-          make test-all
-
   build:
-    needs: test
+    needs: check
     runs-on: ubuntu-26.04
     name: Build Combined Module
     steps:
@@ -153,6 +115,51 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: protobuf.lua
-          path: build/protobuf.lua
+          name: protobuf
+          path: build/protobuf*.lua
           retention-days: 30
+          retention-days: 30
+
+  test:
+    needs: build
+    runs-on: ubuntu-26.04
+    continue-on-error: false
+    strategy:
+      fail-fast: true
+      matrix:
+        lua-version: ['5.1', '5.2', '5.3', '5.4', '5.5', 'luajit-2.0', 'luajit-2.1']
+
+    name: Lua ${{ matrix.lua-version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Lua
+        uses: leafo/gh-actions-lua@v13
+        with:
+          # The 'luajit-2.1' target tracks a rolling HEAD which has miscompiled
+          # the signed arithmetic-shift edge cases in zigzag encoding (arshift of
+          # INT_MIN). Pin that matrix entry to the stable OpenResty LuaJIT build;
+          # the job name stays "Lua luajit-2.1" so the required status check matches.
+          luaVersion: ${{ matrix.lua-version == 'luajit-2.1' && 'luajit-openresty' || matrix.lua-version }}
+
+      - name: Setup tests
+        run: |
+          # Set the correct binary name based on the Lua version
+          if [[ "${{ matrix.lua-version }}" == luajit* ]]; then
+            LUA_BINARY=luajit
+          else
+            LUA_BINARY=lua
+          fi
+
+          echo "LUA_BINARY=$LUA_BINARY" >> "$GITHUB_ENV"
+          ${LUA_BINARY} -v
+
+      - name: Download the built files
+        uses: actions/download-artifact@v8
+        with:
+          name: protobuf
+          path: build
+
+      - name: Run tests
+        run: |
+          make test-all test-bundle

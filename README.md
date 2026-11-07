@@ -27,6 +27,9 @@ Download a pre-built single-file module from the
   when composing with libraries that already provide `bitn`.
 - **`protobuf-portable.lua`** - **portable** build with every dependency bundled
   in (zero external dependencies). Use this for a single drop-in file.
+- **`protobuf-tests.lua`** - the portable build plus the test vectors, for
+  running them where the library runs; `dofile("protobuf-tests.lua")` returns
+  the library with `selftest()` added. The other two files carry no test code.
 
 ### Option 2: From Source
 
@@ -205,6 +208,7 @@ make test                # Run all tests
 make test-protobuf       # Run specific module tests
 make test-matrix         # Run tests across all Lua versions
 make test-matrix-protobuf # Run specific module across all Lua versions
+make build test-bundle   # Run the tests against the built files
 
 # Or use scripts directly with custom Lua binary
 LUA_BINARY=lua5.1 ./run_tests.sh
@@ -225,7 +229,7 @@ make typecheck           # Check annotations with lua-language-server
 ### Building
 
 ```bash
-make build               # Build single-file distributions (build/protobuf.lua [core], build/protobuf-portable.lua)
+make build               # Build protobuf.lua (core), protobuf-portable.lua and protobuf-tests.lua
 make clean               # Remove generated files
 ```
 

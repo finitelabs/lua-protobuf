@@ -1,7 +1,7 @@
 -- @test-name Protobuf operations
 --
--- selftest() stays in src/ so it ships and can run on a controller; this only wraps it.
+-- Runs the suite in test_protobuf.lua, which the with-tests build also carries.
 
-local pb = require("protobuf")
+local here = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 
-os.exit(pb.selftest() and 0 or 1)
+os.exit(dofile(here .. "test_protobuf.lua")() and 0 or 1)

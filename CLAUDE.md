@@ -5,7 +5,7 @@
 ```
 lua-protobuf/
 ├── src/protobuf/
-│   ├── init.lua      # Main module with encode/decode and embedded selftest
+│   ├── init.lua      # Main module with encode/decode
 │   └── types.lua     # Generated base type definitions (from empty.proto)
 ├── vendor/
 │   └── bitn.lua      # Vendored bitwise operations library
@@ -20,7 +20,10 @@ lua-protobuf/
 │   ├── maps.proto    # Fixture: map fields and their synthesized entries (check-schema)
 │   ├── test_messages_proto3.proto  # Trimmed upstream conformance message
 │   ├── testlib.lua                 # Shared harness for every *_test.lua module
-│   ├── protobuf_test.lua           # Wraps the embedded selftest()
+│   ├── test_protobuf.lua           # The protobuf test vectors; returns the test function
+│   ├── protobuf_test.lua           # Runs test_protobuf.lua for the runner
+│   ├── lpack_test.lua              # The same under Control4's lpack-shaped string.pack
+│   ├── with_tests.lua              # Main chunk of the with-tests build
 │   ├── math_fallback_test.lua      # frexp/ldexp fallbacks vs native
 │   ├── wire_vectors_test.lua       # Differential wire-format suite
 │   ├── float_vectors_test.lua      # Differential IEEE 754 codec suite
@@ -69,7 +72,7 @@ make check-schema
 ```
 
 `make check` is the gate CI runs. `make all` is `format lint test build`, which
-rewrites `src/` in place and runs none of `format-check`, `check-types`,
+rewrites `src/` and `test/` in place and runs none of `format-check`, `check-types`,
 `check-schema` or `typecheck` — it is not a substitute for `check`.
 
 ### typecheck
@@ -149,7 +152,6 @@ The library provides Protocol Buffers encoding/decoding with these main function
 - `protobuf.decode(schema, message_schema, data)` - Decode protobuf binary to Lua
   table. Returns **two** values, `message, pos`.
 - `protobuf.version()` - Build-injected version string
-- `protobuf.selftest()` - Run embedded test suite
 
 **Every failure raises.** There is no `nil, err` path anywhere in encode or
 decode; callers must `pcall`.
@@ -318,8 +320,8 @@ comparisons and nothing else decides how it reports or exits.
 
 ### The modules
 
-- **protobuf** — `test/protobuf_test.lua`, a wrapper around the embedded
-  `selftest()` in `src/protobuf/init.lua`.
+- **protobuf** — `test/protobuf_test.lua`, which runs the test vectors in
+  `test/test_protobuf.lua`.
 - **math-fallback** — `test/math_fallback_test.lua`, differential against the
   interpreter's native `frexp`/`ldexp`. Native mode only; it clears the globals
   itself to reach the fallbacks and needs the natives surviving as the oracle.
@@ -327,7 +329,7 @@ comparisons and nothing else decides how it reports or exits.
   reference protobuf implementation.
 - **float-vectors** — `test/float_vectors_test.lua`, differential against the C
   float cast and `struct.pack`.
-- **lpack** — `test/lpack_test.lua`, `pb.selftest()` with `string.pack`/`unpack`
+- **lpack** — `test/lpack_test.lua`, the same vectors with `string.pack`/`unpack`
   replaced by Control4's lpack shape before load, so the vendored bitn has to
   decline them and pack bytes itself.
 
@@ -338,11 +340,20 @@ again with them cleared so the module's own fallbacks are bound.
 
 Split by **kind**, not by location:
 
-- **`selftest()` in `src/protobuf/init.lua`** for small, self-contained
-  assertions. It ships inside the amalgamated module on purpose, so it can be run
-  on a controller against the real LuaJIT from a driver. That is coverage no CI
-  run reproduces, and it is why the suite stays in the shipped artifact.
-- **`test/`** for anything generated, oracle-backed or large. These never ship.
+- **`test/test_protobuf.lua`** for small, self-contained assertions. It returns
+  its test function, so the with-tests build (`protobuf-tests.lua`, from
+  `test/with_tests.lua`) can carry it and run it on a controller against the
+  real LuaJIT from a driver. That is coverage no CI run reproduces. It reads the
+  module's chosen `frexp`/`ldexp` through `pb._math`.
+- **`test/*_test.lua`** for anything generated, oracle-backed or large. These
+  never ship.
+
+Nothing under `src/` is test code, and `make build` fails if
+`build/protobuf.lua` mentions `selftest` or `benchmark`.
+`TEST_BUNDLE=build/protobuf.lua ./run_tests.sh` (or `make build test-bundle`)
+registers that file as the `protobuf` loader and takes `src/` off the path, so
+every module runs against what ships. It only registers it, so a module still
+controls what runs first (the lpack stub, cleared math globals).
 
 A vendored library's tests live in its own repo either way. Nothing test-shaped
 belongs in a driver or in the driver template.
@@ -460,9 +471,11 @@ make build
 # Output:
 #   build/protobuf.lua          - Core (canonical); requires external bitn on the path
 #   build/protobuf-portable.lua - Portable; bitn bundled, zero external deps
+#   build/protobuf-tests.lua    - Portable plus test_protobuf.lua, from test/with_tests.lua
 ```
 
-Version is automatically injected from git tags during release.
+`dofile("build/protobuf-tests.lua")` returns the library with `selftest()`
+added. Version is automatically injected from git tags during release.
 
 ## CI/CD
 
@@ -470,15 +483,17 @@ Version is automatically injected from git tags during release.
   - `check` job — `make check`: format-check, luacheck, check-types, check-schema,
     and typecheck against lua-language-server 3.19.2, then `make check-wire-vectors`
     and `make check-float-vectors`
-  - `test` job — `make test-all` across Lua 5.1-5.5, LuaJIT 2.0/2.1
-  - `build` job — single-file distributions
+  - `build` job — the three single files, uploaded as the `protobuf` artifact
+  - `test` job — `make test-all test-bundle` across Lua 5.1-5.5, LuaJIT 2.0/2.1,
+    on the build job's files
   - The `luajit-2.1` matrix entry is silently built as **`luajit-openresty`**:
     rolling LuaJIT HEAD miscompiled the signed arithmetic-shift edge cases in
     zigzag encoding (arshift of INT_MIN). The job name is kept as `Lua luajit-2.1`
     so the required status check still matches, so the matrix does not test what
     its label says.
-- **release.yml**: on version tags (`v*`) — publishes both `build/protobuf.lua`
-  and `build/protobuf-portable.lua`.
+- **release.yml**: on version tags (`v*`) — runs `make test-bundle`, then
+  publishes `build/protobuf.lua`, `build/protobuf-portable.lua` and
+  `build/protobuf-tests.lua`.
 
 `make test-matrix` locally pins `5.1.5 5.2.4 5.3.6 5.4.8 luajit-2.1-dev` and needs
 `luaenv` plus the `luaenv-luarocks` plugin. It does **not** cover Lua 5.5 or
@@ -492,5 +507,7 @@ LuaJIT 2.0, which CI does.
 - LuaCATS annotations on public functions
 
 There is no `.stylua.toml`; these live only as CLI flags in the Makefile and cover
-`src/` only.
+`src/` and `test/`. `test/generated/` is left out of both stylua (`.styluaignore`)
+and luacheck (`exclude_files`): the `check-*-vectors` targets diff it byte for
+byte against the generators.
 - LuaDoc annotations for public functions
