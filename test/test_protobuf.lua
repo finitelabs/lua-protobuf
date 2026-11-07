@@ -1,5 +1,3 @@
---- Tests for protobuf: `make test` runs them, and so does the with-tests build's selftest().
-
 local pb = require("protobuf")
 local bitn = require("bitn")
 local bit64 = bitn.bit64
