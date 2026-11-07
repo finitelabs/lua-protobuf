@@ -47,7 +47,17 @@ local function check_frexp(x, label)
   local got_m, got_e = fb_frexp(x)
   if not same(want_m, got_m) or want_e ~= got_e then
     -- %s, not %d: a broken fallback can return a non-integer exponent.
-    report:record(string.format("frexp(%s) [%s] want (%s, %s) got (%s, %s)", tostring(x), label, tostring(want_m), tostring(want_e), tostring(got_m), tostring(got_e)))
+    report:record(
+      string.format(
+        "frexp(%s) [%s] want (%s, %s) got (%s, %s)",
+        tostring(x),
+        label,
+        tostring(want_m),
+        tostring(want_e),
+        tostring(got_m),
+        tostring(got_e)
+      )
+    )
   end
 end
 
@@ -56,7 +66,9 @@ local function check_ldexp(m, e, label)
   local want = real_ldexp(m, e)
   local got = fb_ldexp(m, e)
   if not same(want, got) then
-    report:record(string.format("ldexp(%s, %d) [%s] want %s got %s", tostring(m), e, label, tostring(want), tostring(got)))
+    report:record(
+      string.format("ldexp(%s, %d) [%s] want %s got %s", tostring(m), e, label, tostring(want), tostring(got))
+    )
   end
 end
 

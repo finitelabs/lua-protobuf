@@ -65,8 +65,62 @@ jobs:
       - name: Check float vectors
         run: make check-float-vectors
 
-  test:
+  build:
     needs: check
+    runs-on: ubuntu-26.04
+    name: Build Combined Module
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Lua
+        uses: leafo/gh-actions-lua@v13
+        with:
+          luaVersion: '5.4'
+
+      - name: Setup LuaRocks
+        uses: leafo/gh-actions-luarocks@v6
+        with:
+          luarocksVersion: "3.13.0"
+
+      - name: Install amalg
+        run: luarocks install amalg
+
+      - name: Build combined module
+        run: make build
+
+      - name: Verify build
+        run: |
+          # Check default build
+          if [ -f "build/protobuf.lua" ]; then
+            echo "✅ build/protobuf.lua exists ($(wc -c < "build/protobuf.lua") bytes)"
+            # Quick sanity check - make sure it contains expected content
+            if grep -q '@module "protobuf"' build/protobuf.lua; then
+              echo "✅ Build contains expected content"
+            else
+              echo "❌ Build seems corrupted"
+              exit 1
+            fi
+          else
+            echo "❌ build/protobuf.lua missing"
+            exit 1
+          fi
+          # Check portable build (all dependencies bundled)
+          if [ -f "build/protobuf-portable.lua" ]; then
+            echo "✅ build/protobuf-portable.lua exists ($(wc -c < "build/protobuf-portable.lua") bytes)"
+          else
+            echo "❌ build/protobuf-portable.lua missing"
+            exit 1
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: protobuf
+          path: build/protobuf*.lua
+          retention-days: 30
+
+  test:
+    needs: build
     runs-on: ubuntu-26.04
     continue-on-error: false
     strategy:
@@ -99,60 +153,12 @@ jobs:
           echo "LUA_BINARY=$LUA_BINARY" >> "$GITHUB_ENV"
           ${LUA_BINARY} -v
 
+      - name: Download the built files
+        uses: actions/download-artifact@v8
+        with:
+          name: protobuf
+          path: build
+
       - name: Run tests
         run: |
-          make test-all
-
-  build:
-    needs: test
-    runs-on: ubuntu-26.04
-    name: Build Combined Module
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup Lua
-        uses: leafo/gh-actions-lua@v13
-        with:
-          luaVersion: '5.4'
-
-      - name: Setup LuaRocks
-        uses: leafo/gh-actions-luarocks@v6
-        with:
-          luarocksVersion: "3.13.0"
-
-      - name: Install amalg
-        run: luarocks install amalg
-
-      - name: Build combined module
-        run: make build
-
-      - name: Verify build
-        run: |
-          # Check default build
-          if [ -f "build/protobuf.lua" ]; then
-            echo "✅ build/protobuf.lua exists ($(wc -c < "build/protobuf.lua") bytes)"
-            # Quick sanity check - make sure it contains expected content
-            if grep -q "Protobuf" build/protobuf.lua; then
-              echo "✅ Build contains expected content"
-            else
-              echo "❌ Build seems corrupted"
-              exit 1
-            fi
-          else
-            echo "❌ build/protobuf.lua missing"
-            exit 1
-          fi
-          # Check portable build (all dependencies bundled)
-          if [ -f "build/protobuf-portable.lua" ]; then
-            echo "✅ build/protobuf-portable.lua exists ($(wc -c < "build/protobuf-portable.lua") bytes)"
-          else
-            echo "❌ build/protobuf-portable.lua missing"
-            exit 1
-          fi
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: protobuf.lua
-          path: build/protobuf.lua
-          retention-days: 30
+          make test-all test-bundle

@@ -101,12 +101,7 @@ local function compare_map(field, got, want, path)
       return false, path .. ": no entry with key " .. describe(want_key)
     end
     matched[found] = true
-    local ok, detail = compare_value(
-      value_field,
-      got[found],
-      want_value,
-      path .. "[" .. describe(want_key) .. "]"
-    )
+    local ok, detail = compare_value(value_field, got[found], want_value, path .. "[" .. describe(want_key) .. "]")
     if not ok then
       return false, detail
     end
