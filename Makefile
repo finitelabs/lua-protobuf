@@ -7,8 +7,6 @@ LUA_PATH_LOCAL := ./?.lua;./?/init.lua;./src/?.lua;./src/?/init.lua;./vendor/?.l
 # Lua path for the with-tests build: the library plus test/
 LUA_PATH_TESTS := ./test/?.lua;$(LUA_PATH_LOCAL)
 
-LUA_BINARY ?= lua
-
 # Interpreter for standalone tool scripts; run_tests.sh honours the same variable
 LUA_BINARY ?= lua
 
