@@ -94,7 +94,7 @@ jobs:
           if [ -f "build/protobuf.lua" ]; then
             echo "✅ build/protobuf.lua exists ($(wc -c < "build/protobuf.lua") bytes)"
             # Quick sanity check - make sure it contains expected content
-            if grep -q 'package.preload\[ "protobuf.types" \]' build/protobuf.lua; then
+            if grep -q '@module "protobuf"' build/protobuf.lua; then
               echo "✅ Build contains expected content"
             else
               echo "❌ Build seems corrupted"
