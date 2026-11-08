@@ -1,9 +1,10 @@
 #!/bin/bash
 
 # List of luaenv versions to test
-# The versions CI tests: gh-actions-lua's 5.1-5.5 aliases and LuaJIT's v2.0 branch. CI's
-# luajit-2.1 leg is OpenResty's LuaJIT, which lua-build doesn't offer; the v2.1 branch stands in.
-LUA_VERSIONS=("5.1.5" "5.2.4" "5.3.6" "5.4.9" "5.5.1" "luajit-2.0-dev" "luajit-2.1-dev")
+# The versions CI tests (gh-actions-lua's 5.1-5.5 aliases). CI's luajit-2.1 leg is OpenResty's
+# LuaJIT, which lua-build doesn't offer, so the v2.1 branch stands in. CI also runs LuaJIT 2.0, which
+# has no arm64 port, so it stays CI-only.
+LUA_VERSIONS=("5.1.5" "5.2.4" "5.3.6" "5.4.9" "5.5.1" "luajit-2.1-dev")
 
 # Colors for output
 green='\033[0;32m'
