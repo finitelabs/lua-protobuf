@@ -495,9 +495,12 @@ added. Version is automatically injected from git tags during release.
   publishes `build/protobuf.lua`, `build/protobuf-portable.lua` and
   `build/protobuf-tests.lua`.
 
-`make test-matrix` locally pins `5.1.5 5.2.4 5.3.6 5.4.8 luajit-2.1-dev` and needs
-`luaenv` plus the `luaenv-luarocks` plugin. It does **not** cover Lua 5.5 or
-LuaJIT 2.0, which CI does.
+`make test-matrix` locally runs `5.1.5 5.2.4 5.3.6 5.4.9 5.5.1 luajit-2.1-dev` and
+needs `luaenv` plus the `luaenv-luarocks` plugin; 5.4.9 and 5.5.1 need a
+lua-build plugin with their definitions (upstream cehoffman/lua-build has had
+them since August 2026). Two differences from CI stay: CI's `luajit-2.1` leg is
+OpenResty's LuaJIT (above), which lua-build doesn't offer, so the local run uses
+the v2.1 branch; and LuaJIT 2.0 has no arm64 port, so it runs in CI only.
 
 ## Code Style
 
